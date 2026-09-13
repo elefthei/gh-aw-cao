@@ -1054,7 +1054,11 @@ test("release increments the semantic version, prepares a draft, then updates it
   const version = jobs.get("resolve-version")?.block ?? "";
   const validation = jobs.get("validate-package")?.block ?? "";
   const prepare = jobs.get("prepare-release")?.block ?? "";
+  const safeOutputs = jobs.get("safe_outputs")?.block ?? "";
+  const compiled = parse(source);
   const rootManifest = readFileSync(join(root, "aw.yml"), "utf8");
+  const fetchReleaseContext = compiled.jobs.agent.steps.find((step) => step.name === "Fetch release context");
+  const processSafeOutputs = compiled.jobs.safe_outputs.steps.find((step) => step.name === "Process Safe Outputs");
 
   assert.equal(config.on.workflow_dispatch.inputs.operation, undefined);
   assert.equal(config.on.workflow_dispatch.inputs.bump.required, false);
@@ -1062,6 +1066,7 @@ test("release increments the semantic version, prepares a draft, then updates it
   assert.deepEqual(config.on.workflow_dispatch.inputs.bump.options, ["patch", "minor", "major"]);
   assert.match(version, /RELEASE_BUMP: \$\{\{ inputs\.bump \}\}/);
   assert.match(version, /TRIGGERING_ACTOR: \$\{\{ github\.triggering_actor \}\}/);
+  assert.match(version, /github-token: \$\{\{ secrets\.GH_AW_GITHUB_TOKEN \|\| github\.token \}\}/);
   assert.match(version, /const bump = \['patch', 'minor', 'major'\]\.includes\(requestedBump\) \? requestedBump : 'patch'/);
   assert.match(version, /Unknown release bump.*defaulting to patch/);
   assert.match(version, /context\.payload\.repository\.fork/);
@@ -1082,8 +1087,12 @@ test("release increments the semantic version, prepares a draft, then updates it
   assert.match(version, /else if \(bump === 'minor'\)/);
   assert.match(version, /Resolved \$\{bump\} bump from/);
   assert.match(validation, /CENTRAL_AGENTIC_OPS_PACKAGE_SOURCE: \$\{\{ github\.repository \}\}@\$\{\{ github\.sha \}\}/);
+  assert.match(validation, /GH_TOKEN: \$\{\{ secrets\.GH_AW_GITHUB_TOKEN \|\| github\.token \}\}/);
   assert.match(validation, /npm run test:package-lifecycle/);
+  assert.match(safeOutputs, /github-token: \$\{\{ secrets\.GH_AW_GITHUB_TOKEN \|\| secrets\.GITHUB_TOKEN \}\}/);
+  assert.deepEqual(JSON.parse(processSafeOutputs.env.GH_AW_SAFE_OUTPUTS_HANDLER_CONFIG).update_release, { max: 1 });
   assert.deepEqual(jobs.get("prepare-release")?.needs, ["resolve-version", "validate-package"]);
+  assert.match(prepare, /github-token: \$\{\{ secrets\.GH_AW_GITHUB_TOKEN \|\| github\.token \}\}/);
   assert.match(prepare, /git\.createRef/);
   assert.match(prepare, /ref: `refs\/tags\/\$\{releaseTag\}`/);
   assert.match(prepare, /sha: context\.sha/);
@@ -1101,13 +1110,12 @@ test("release increments the semantic version, prepares a draft, then updates it
   assert.match(prepare, /publish the draft, and mark it as the latest release from the GitHub website/);
   assert.match(prepare, /install or update this package only with gh aw add or gh aw update/);
   assert.equal(jobs.has("publish-release"), false);
-  assert.match(agenticSource, /update-release-description:/);
-  assert.match(agenticSource, /Call `safeoutputs\/update_release_description` exactly once/);
-  assert.match(agenticSource, /ACTUAL_TAG.*RELEASE_TAG/);
-  assert.match(agenticSource, /IS_DRAFT.*true/);
-  assert.match(agenticSource, /Download prepared release context/);
-  assert.match(agenticSource, /RELEASE_SHA.*GITHUB_SHA/);
-  assert.match(agenticSource, /TAG_SHA.*GITHUB_SHA/);
+  assert.equal(jobs.has("update_release_description"), false);
+  assert.deepEqual(Object.keys(config["safe-outputs"]).sort(), ["threat-detection", "update-release"]);
+  assert.match(agenticSource, /update-release:/);
+  assert.match(agenticSource, /Call `safeoutputs\/update_release` exactly once/);
+  assert.match(agenticSource, /`operation`: `prepend`/);
+  assert.equal(fetchReleaseContext.env.GH_TOKEN, "${{ secrets.GH_AW_GITHUB_TOKEN || github.token }}");
   assert.match(agenticSource, /releases\/\$RELEASE_ID/);
   assert.match(agenticSource, /gh api --paginate --slurp/);
   assert.match(agenticSource, /Keep the existing GitHub-generated notes intact/);
