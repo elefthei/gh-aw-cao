@@ -11,6 +11,8 @@ import {
   paginateDashboardSources,
   resolveDashboardQuerySources
 } from '../../src/data/queries/declarative.js';
+import { applyTableQuerySafetyLimits } from '../../src/data/table-capacity.js';
+import { dashboardTableSourceNames } from '../../src/presenter.js';
 import { computeValue, tidy } from '../../src/data-operations.js';
 import { processDataRequest } from '../../src/data-worker.js';
 
@@ -61,7 +63,8 @@ const usage = {
   ],
   metadata: metadata('usage', { freshness: 'stale' })
 };
-const dashboardQueries = JSON.parse(readFileSync(`${process.cwd()}/dashboard.json`, 'utf8')).dashboard.queries;
+const dashboardDocument = JSON.parse(readFileSync(`${process.cwd()}/dashboard.json`, 'utf8'));
+const dashboardQueries = dashboardDocument.dashboard.queries;
 
 describe('declarative dashboard queries', () => {
   it('counts database entities through the declared horizon queries', () => {
@@ -666,6 +669,35 @@ describe('declarative dashboard queries', () => {
           'run-link': { href: 'run-1' }
         })
       ]);
+    });
+
+  it('caps event inspection at the query output limit instead of becoming unavailable', () => {
+      const events = {
+        source: 'events',
+        rows: Array.from(
+          { length: DASHBOARD_QUERY_LIMITS['max-output-rows'] + 1 },
+          (_, index) => ({
+            event: `event-${String(index).padStart(6, '0')}`,
+            'event-timestamp': new Date(Date.UTC(2026, 8, 1) + index).toISOString()
+          })
+        ),
+        metadata: metadata('events')
+      };
+      const runs = { source: 'runs', rows: [], metadata: metadata('runs') };
+
+      const derived = executeDashboardQueries(
+        applyTableQuerySafetyLimits(
+          dashboardQueries,
+          dashboardTableSourceNames(dashboardDocument)
+        ),
+        { events, runs },
+        ['event-inspection']
+      );
+
+      expect(derived['event-inspection'].metadata.availability).toBe('available');
+      expect(derived['event-inspection'].rows).toHaveLength(DASHBOARD_QUERY_LIMITS['max-output-rows']);
+      expect(derived['event-inspection'].rows.at(0)?.event).toBe('event-100000');
+      expect(derived['event-inspection'].rows.at(-1)?.event).toBe('event-000001');
     });
 
   it('computes the Repositories and Packages view payloads from dashboard queries', () => {

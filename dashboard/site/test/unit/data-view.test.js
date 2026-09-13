@@ -249,6 +249,43 @@ describe('data view renderer', () => {
     expect(rendered?.querySelector('.view-description')).toBeNull();
   });
 
+  it('applies the browser row limit after preparing table rows and across continuations', async () => {
+    const load = vi.fn(async () => ({
+      rows: [{ event: 'older' }, { event: 'oldest' }],
+      continuationToken: 'page-3'
+    }));
+    const initialRows = Array.from({ length: 25 }, (_, index) => ({ event: `event-${index}` }));
+    const rendered = renderDataView('table', {
+      pageId: 'events',
+      title: 'Events',
+      view: {
+        mark: 'table',
+        'lazy-list': true,
+        encoding: { columns: [{ field: 'event', type: 'nominal' }] }
+      },
+      sourceName: 'events',
+      rows: initialRows,
+      rowLimit: 26,
+      metadata,
+      contextDetails: [],
+      headingTag: 'h3',
+      prepareTableRows: (rows) => rows,
+      buildChartPoints: () => [],
+      prepareChartPoints: () => [],
+      toText: String,
+      continuation: { token: 'page-2', totalRows: 27, load }
+    });
+
+    expect(rendered?.querySelectorAll('tbody tr')).toHaveLength(25);
+    const loadMore = rendered?.querySelector('[data-table-more]');
+    expect(loadMore).toBeInstanceOf(HTMLButtonElement);
+    /** @type {HTMLButtonElement} */ (loadMore).click();
+    await vi.waitFor(() => expect(rendered?.querySelectorAll('tbody tr')).toHaveLength(26));
+    expect(rendered?.querySelector('tbody')?.textContent).toContain('older');
+    expect(rendered?.querySelector('tbody')?.textContent).not.toContain('oldest');
+    expect(rendered?.querySelector('[data-table-more]')?.hasAttribute('hidden')).toBe(true);
+  });
+
   it('omits table facets for columns with filtering disabled', () => {
     const rendered = renderDataView('table', {
       pageId: 'repositories',

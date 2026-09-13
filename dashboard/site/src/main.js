@@ -1,4 +1,4 @@
-      import { dashboardPageLazySourceNames, dashboardPageSourceNames, disposeDashboard, renderDashboard, updateWithViewTransition } from "./presenter.js";
+      import { dashboardPageLazySourceNames, dashboardPageSourceNames, dashboardTableSourceNames, disposeDashboard, renderDashboard, updateWithViewTransition } from "./presenter.js";
       import { startLoadingProgress } from "./loading-progress.js";
       import { offerCancelCommand } from "./cancel-command.js";
       import { loadCanonicalDashboardPage, loadCanonicalDashboardSources, processDashboardQueries, refreshCanonicalDashboardSources, subscribeCanonicalDashboardView } from "./data-processor.js";
@@ -12,6 +12,7 @@
       import { renderLoadingPlaceholderBlocks } from "./components/ui-primitives.js";
       import { startAutomaticDashboardDataUpdates } from "./dashboard-data-updates.js";
       import { attachCliActions, setDeclaredCliActions } from "./components/cli-actions.js";
+      import { applyTableQuerySafetyLimits, browserTableCapacityDecision, logTableCapacityDecision } from "./data/table-capacity.js";
 
       /** @type {Window & { collectFullDiagnostics?: typeof collectFullDiagnostics }} */ (window).collectFullDiagnostics =
         () => collectFullDiagnostics();
@@ -80,7 +81,14 @@
         languageVersion: dashboardSchema["language-version"],
         dashboard: dashboardSchema.dashboard,
       };
-      const dashboardQueries = dashboardSchema.dashboard.queries ?? [];
+      const tableSourceNames = dashboardTableSourceNames(dashboardDocument);
+      const tableCapacityDecision = browserTableCapacityDecision(window);
+      const tableRowLimit = tableCapacityDecision.rowLimit;
+      logTableCapacityDecision(tableCapacityDecision);
+      const dashboardQueries = applyTableQuerySafetyLimits(
+        dashboardSchema.dashboard.queries ?? [],
+        tableSourceNames,
+      );
       const root = document.querySelector("#root");
       if (!(root instanceof HTMLElement)) throw new Error("Dashboard root element is missing.");
       /** @type {Record<string, import('./presenter.js').LogicalSourceInput>} */
@@ -207,6 +215,7 @@
           loading: state === "loading",
           loadPageSources,
           loadHorizonSources,
+          tableRowLimit,
         });
         if (state === "loading") {
           dashboard.classList.add("dashboard-loading");

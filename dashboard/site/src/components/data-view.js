@@ -88,6 +88,7 @@ function resolveGithubEntityLink(row, field, fallbackLabel) {
  *   metadata: import('../presenter.js').SourceMetadata,
  *   contextDetails: string[],
  *   headingTag: 'h3'|'h4',
+ *   rowLimit?: number,
  *   units?: Record<string, { name: string, symbol: string, significant: number }>,
  *   prepareTableRows: (rows: Array<Record<string, unknown>>, columns: TableField[], data: unknown) => Array<Record<string, unknown>>,
  *   buildChartPoints: (pageId: string, title: string, rows: Array<Record<string, unknown>>, x: Record<string, any> | null, y: Record<string, any> | null, color: Record<string, any> | null, hrefField: string | null) => ChartPoint[],
@@ -243,7 +244,7 @@ function renderListView(context) {
 
 /** @param {DataViewContext} context */
 function renderTableView(context) {
-  const { pageId, title, view, rows, metadata, contextDetails, headingTag, prepareTableRows, toText, units = {} } = context;
+  const { pageId, title, view, rows, metadata, contextDetails, headingTag, prepareTableRows, toText, units = {}, rowLimit } = context;
   const columns = /** @type {TableField[]} */ (isPlainObject(view.encoding) && Array.isArray(view.encoding.columns)
     ? view.encoding.columns.filter((column) => isPlainObject(column) && typeof column.field === 'string')
     : []);
@@ -251,7 +252,13 @@ function renderTableView(context) {
     ? view.encoding.href
     : null;
   const hrefField = typeof hrefDefinition?.field === 'string' ? hrefDefinition.field : null;
-  const tableRows = prepareTableRows(rows, columns, view.data);
+  const preparedRows = prepareTableRows(rows, columns, view.data);
+  const effectiveRowLimit = Number.isSafeInteger(rowLimit) && Number(rowLimit) > 0
+    ? Number(rowLimit)
+    : Number.POSITIVE_INFINITY;
+  const tableRows = Number.isFinite(effectiveRowLimit)
+    ? preparedRows.slice(0, effectiveRowLimit)
+    : preparedRows;
   const tree = isPlainObject(view.tree)
     && typeof view.tree['id-field'] === 'string'
     && typeof view.tree['parent-field'] === 'string'
@@ -423,12 +430,13 @@ function renderTableView(context) {
       )),
       bodyRows,
       lazyList: view['lazy-list'] === true,
-      continuation: continuation
+      continuation: continuation && renderedRowCount < effectiveRowLimit
         ? {
             ...continuation,
             load: async (token) => {
               const next = await continuation.load(token);
-              const nextTableRows = prepareTableRows(next.rows, columns, view.data);
+              const remainingRows = effectiveRowLimit - renderedRowCount;
+              const nextTableRows = prepareTableRows(next.rows, columns, view.data).slice(0, remainingRows);
               const nextDisplayedRows = tree
                 ? arrangeTreeRows(nextTableRows, tree['id-field'], tree['parent-field'])
                 : nextTableRows.map((row) => ({ row, depth: 0 }));
@@ -437,7 +445,9 @@ function renderTableView(context) {
               renderedRowCount += rows.length;
               return {
                 rows,
-                continuationToken: next.continuationToken
+                continuationToken: renderedRowCount < effectiveRowLimit
+                  ? next.continuationToken
+                  : undefined
               };
             }
           }
