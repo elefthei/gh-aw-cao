@@ -464,7 +464,7 @@ export function adaptGhAwLogs(input) {
 }
 
 /**
- * @param {string} content
+ * @param {string | Uint8Array} content
  * @param {{ context?: unknown, workflowHints?: { owner: string, repository: string, name: string, path: string }[] }} [options]
  * @returns {{
  *   observations: import('../model/schema.js').CanonicalObservation[],
@@ -483,32 +483,139 @@ export function adaptGhAwLogs(input) {
  * }}
  */
 export function adaptCachedGhAwJsonl(content, options = {}) {
-  if (typeof content !== 'string') throw new TypeError('gh-aw JSONL must be a string');
+  const binaryContent = typeof content !== 'string'
+    && ArrayBuffer.isView(content)
+    && content.BYTES_PER_ELEMENT === 1;
+  if (typeof content !== 'string' && !binaryContent) {
+    throw new TypeError('gh-aw JSONL must be a string or Uint8Array');
+  }
   if (cachedJsonlExpression.contract !== 'gh-aw-cao.jsonl-ingestion'
     || cachedJsonlExpression.version !== 1) {
     throw new TypeError('Unsupported cached gh-aw ingestion expression');
   }
   const sourceSchemaVersion = cachedJsonlExpression.sourceSchemaVersion;
   const knownKinds = new Set(Object.keys(cachedJsonlExpression.variants));
-  /** @type {{ envelope: Record<string, unknown>, line: number }[]} */
-  const envelopes = [];
-  for (const [index, line] of content.split(/\r?\n/).entries()) {
-    if (!line.trim()) continue;
+  const decoder = new TextDecoder();
+  /** @param {string} line @param {number} lineNumber */
+  const parseEnvelope = (line, lineNumber) => {
     let envelope;
-    try { envelope = objectValue(JSON.parse(line), `gh-aw JSONL line ${index + 1}`); } catch (error) {
-      throw new TypeError(`gh-aw JSONL line ${index + 1} must contain valid JSON`, { cause: error });
+    try { envelope = objectValue(JSON.parse(line), `gh-aw JSONL line ${lineNumber}`); } catch (error) {
+      throw new TypeError(`gh-aw JSONL line ${lineNumber} must contain valid JSON`, { cause: error });
     }
     if (envelope.schema_version !== sourceSchemaVersion) {
       throw new TypeError(
-        `Unsupported gh-aw JSONL schema version at line ${index + 1}: ${String(envelope.schema_version)}`
+        `Unsupported gh-aw JSONL schema version at line ${lineNumber}: ${String(envelope.schema_version)}`
       );
     }
-    const kind = requiredString(envelope.kind, `gh-aw JSONL line ${index + 1}.kind`);
-    if (!knownKinds.has(kind)) {
-      throw new TypeError(`Unsupported gh-aw JSONL kind at line ${index + 1}: ${kind}`);
+    const kind = requiredString(envelope.kind, `gh-aw JSONL line ${lineNumber}.kind`);
+    return knownKinds.has(kind) ? { envelope, line: lineNumber } : null;
+  };
+  function* envelopes() {
+    let start = 0;
+    let lineNumber = 0;
+    while (start <= content.length) {
+      lineNumber += 1;
+      const end = typeof content === 'string'
+        ? content.indexOf('\n', start)
+        : content.indexOf(10, start);
+      const boundary = end === -1 ? content.length : end;
+      const line = typeof content === 'string'
+        ? content.slice(start, boundary)
+        : decoder.decode(content.subarray(start, boundary));
+      if (line.trim()) {
+        const parsed = parseEnvelope(line, lineNumber);
+        if (parsed) yield parsed;
+      }
+      if (end === -1) break;
+      start = end + 1;
     }
-    envelopes.push({ envelope, line: index + 1 });
   }
+  const accumulator = createCachedGhAwJsonlAccumulator(options);
+  for (const envelope of envelopes()) accumulator.accept(envelope);
+  return accumulator.finish();
+}
+
+function createCachedJsonlPayloadHasher() {
+  const hashes = Array.from({ length: 8 }, (_, index) => (0x811c9dc5 ^ (index * 0x9e3779b9)) >>> 0);
+  return {
+    /** @param {Uint8Array} bytes */
+    update(bytes) {
+      for (const byte of bytes) {
+        for (let index = 0; index < hashes.length; index += 1) {
+          hashes[index] = Math.imul(hashes[index] ^ byte, 0x01000193 + (index * 2)) >>> 0;
+        }
+      }
+    },
+    digest() {
+      return hashes.map((hash) => hash.toString(16).padStart(8, '0')).join('');
+    }
+  };
+}
+
+/** @param {string | Uint8Array} content */
+export function cachedJsonlPayloadIdentity(content) {
+  const hasher = createCachedJsonlPayloadHasher();
+  hasher.update(typeof content === 'string' ? new TextEncoder().encode(content) : content);
+  return hasher.digest();
+}
+
+/**
+ * @param {AsyncIterable<string | Uint8Array>} chunks
+ * @param {{ context?: unknown, workflowHints?: { owner: string, repository: string, name: string, path: string }[] }} [options]
+ */
+export async function adaptCachedGhAwJsonlStream(chunks, options = {}) {
+  if (cachedJsonlExpression.contract !== 'gh-aw-cao.jsonl-ingestion'
+    || cachedJsonlExpression.version !== 1) {
+    throw new TypeError('Unsupported cached gh-aw ingestion expression');
+  }
+  const sourceSchemaVersion = cachedJsonlExpression.sourceSchemaVersion;
+  const knownKinds = new Set(Object.keys(cachedJsonlExpression.variants));
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  const hasher = createCachedJsonlPayloadHasher();
+  const accumulator = createCachedGhAwJsonlAccumulator(options);
+  let pending = '';
+  let lineNumber = 0;
+  /** @param {string} line */
+  const accept = (line) => {
+    lineNumber += 1;
+    if (!line.trim()) return;
+    let envelope;
+    try { envelope = objectValue(JSON.parse(line), `gh-aw JSONL line ${lineNumber}`); } catch (error) {
+      throw new TypeError(`gh-aw JSONL line ${lineNumber} must contain valid JSON`, { cause: error });
+    }
+    if (envelope.schema_version !== sourceSchemaVersion) {
+      throw new TypeError(
+        `Unsupported gh-aw JSONL schema version at line ${lineNumber}: ${String(envelope.schema_version)}`
+      );
+    }
+    const kind = requiredString(envelope.kind, `gh-aw JSONL line ${lineNumber}.kind`);
+    if (knownKinds.has(kind)) accumulator.accept({ envelope, line: lineNumber });
+  };
+  for await (const chunk of chunks) {
+    const bytes = typeof chunk === 'string' ? encoder.encode(chunk) : chunk;
+    hasher.update(bytes);
+    pending += decoder.decode(bytes, { stream: true });
+    let start = 0;
+    let newline;
+    while ((newline = pending.indexOf('\n', start)) !== -1) {
+      accept(pending.slice(start, newline));
+      start = newline + 1;
+    }
+    if (start > 0) pending = pending.slice(start);
+  }
+  pending += decoder.decode();
+  if (pending) accept(pending);
+  return {
+    ...accumulator.finish(),
+    payloadIdentity: hasher.digest()
+  };
+}
+
+/**
+ * @param {{ context?: unknown, workflowHints?: { owner: string, repository: string, name: string, path: string }[] }} options
+ */
+function createCachedGhAwJsonlAccumulator(options) {
 
   /**
    * @typedef {{
@@ -525,7 +632,13 @@ export function adaptCachedGhAwJsonl(content, options = {}) {
 
   /** @type {Map<string, CachedRun>} */
   const enrichedRuns = new Map();
+  /** @type {{ envelope: Record<string, unknown>, line: number }[]} */
+  const rateLimitEnvelopes = [];
+  /** @type {Map<string, CachedRun>} */
+  const rawRuns = new Map();
+  let records = 0;
   let agenticRunRecords = 0;
+  let rawPayloadRecords = 0;
   /** @type {Map<string, Set<string>>} */
   const workflowPaths = new Map();
   for (const hint of options.workflowHints ?? []) {
@@ -535,55 +648,56 @@ export function adaptCachedGhAwJsonl(content, options = {}) {
     paths.add(hint.path);
     workflowPaths.set(lookup, paths);
   }
-  for (const { envelope, line } of envelopes) {
-    if (envelope.kind !== 'run') continue;
-    agenticRunRecords += 1;
-    const run = objectValue(envelope.run, `gh-aw JSONL line ${line}.run`);
-    const organization = requiredString(run.organization, `gh-aw JSONL line ${line}.run.organization`);
-    const coordinates = repositoryCoordinates(
-      requiredString(run.repository, `gh-aw JSONL line ${line}.run.repository`),
-      organization
-    );
-    const workflowName = requiredString(
-      run.workflow_name,
-      `gh-aw JSONL line ${line}.run.workflow_name`
-    );
-    const workflowPath = requiredString(
-      run.workflow_path,
-      `gh-aw JSONL line ${line}.run.workflow_path`
-    );
-    const githubRunId = identifier(run.run_id, `gh-aw JSONL line ${line}.run.run_id`);
-    const attempt = positiveInteger(
-      run.run_attempt ?? 1,
-      `gh-aw JSONL line ${line}.run.run_attempt`
-    );
-    const id = runId(githubRunId, attempt);
-    const observedAt = canonicalTimestamp(
-      run.updated_at ?? run.created_at,
-      `gh-aw JSONL line ${line}.run.updated_at`
-    );
-    const candidate = {
-      line,
-      observedAt,
-      value: run,
-      ...coordinates,
-      workflowName,
-      workflowPath
-    };
-    enrichedRuns.set(id, enrichedRuns.has(id)
-      ? preferNewer(/** @type {CachedRun} */ (enrichedRuns.get(id)), candidate)
-      : candidate);
-    const lookup = `${coordinates.fullName.toLowerCase()}:${workflowName.toLowerCase()}`;
-    const paths = workflowPaths.get(lookup) ?? new Set();
-    paths.add(workflowSourcePath(workflowPath));
-    workflowPaths.set(lookup, paths);
-  }
-
-  /** @type {Map<string, CachedRun>} */
-  const rawRuns = new Map();
-  let rawPayloadRecords = 0;
-  for (const { envelope, line } of envelopes) {
-    if (envelope.kind !== 'workflow_runs') continue;
+  /** @param {{ envelope: Record<string, unknown>, line: number }} record */
+  const accept = ({ envelope, line }) => {
+    records += 1;
+    if (envelope.kind === 'github_api_rate_limit') {
+      rateLimitEnvelopes.push({ envelope, line });
+    }
+    if (envelope.kind === 'run') {
+      agenticRunRecords += 1;
+      const run = objectValue(envelope.run, `gh-aw JSONL line ${line}.run`);
+      const organization = requiredString(run.organization, `gh-aw JSONL line ${line}.run.organization`);
+      const coordinates = repositoryCoordinates(
+        requiredString(run.repository, `gh-aw JSONL line ${line}.run.repository`),
+        organization
+      );
+      const workflowName = requiredString(
+        run.workflow_name,
+        `gh-aw JSONL line ${line}.run.workflow_name`
+      );
+      const workflowPath = requiredString(
+        run.workflow_path,
+        `gh-aw JSONL line ${line}.run.workflow_path`
+      );
+      const githubRunId = identifier(run.run_id, `gh-aw JSONL line ${line}.run.run_id`);
+      const attempt = positiveInteger(
+        run.run_attempt ?? 1,
+        `gh-aw JSONL line ${line}.run.run_attempt`
+      );
+      const id = runId(githubRunId, attempt);
+      const observedAt = canonicalTimestamp(
+        run.updated_at ?? run.created_at,
+        `gh-aw JSONL line ${line}.run.updated_at`
+      );
+      const candidate = {
+        line,
+        observedAt,
+        value: run,
+        ...coordinates,
+        workflowName,
+        workflowPath
+      };
+      enrichedRuns.set(id, enrichedRuns.has(id)
+        ? preferNewer(/** @type {CachedRun} */ (enrichedRuns.get(id)), candidate)
+        : candidate);
+      const lookup = `${coordinates.fullName.toLowerCase()}:${workflowName.toLowerCase()}`;
+      const paths = workflowPaths.get(lookup) ?? new Set();
+      paths.add(workflowSourcePath(workflowPath));
+      workflowPaths.set(lookup, paths);
+      return;
+    }
+    if (envelope.kind !== 'workflow_runs') return;
     const request = objectValue(envelope.request, `gh-aw JSONL line ${line}.request`);
     const coordinates = repositoryCoordinates(
       requiredString(request.repository, `gh-aw JSONL line ${line}.request.repository`)
@@ -606,10 +720,6 @@ export function adaptCachedGhAwJsonl(content, options = {}) {
         run.workflowName,
         `gh-aw JSONL line ${line}.payload[${payloadIndex}].workflowName`
       );
-      const paths = workflowPaths.get(
-        `${coordinates.fullName.toLowerCase()}:${workflowName.toLowerCase()}`
-      );
-      const workflowPath = paths?.size === 1 ? [...paths][0] : undefined;
       const observedAt = canonicalTimestamp(
         run.updatedAt ?? run.createdAt,
         `gh-aw JSONL line ${line}.payload[${payloadIndex}].updatedAt`
@@ -621,13 +731,21 @@ export function adaptCachedGhAwJsonl(content, options = {}) {
         value: run,
         ...coordinates,
         workflowName,
-        workflowPath
+        workflowPath: undefined
       };
       rawRuns.set(id, rawRuns.has(id)
         ? preferNewer(/** @type {CachedRun} */ (rawRuns.get(id)), candidate)
         : candidate);
     }
-  }
+  };
+
+  const finish = () => {
+    for (const run of rawRuns.values()) {
+      const paths = workflowPaths.get(
+        `${run.fullName.toLowerCase()}:${run.workflowName.toLowerCase()}`
+      );
+      run.workflowPath = paths?.size === 1 ? [...paths][0] : undefined;
+    }
 
   /** @type {import('../model/schema.js').CanonicalObservation[]} */
   const observations = [];
@@ -1140,9 +1258,6 @@ export function adaptCachedGhAwJsonl(content, options = {}) {
     }
   }
 
-  const rateLimitEnvelopes = envelopes.filter(({ envelope }) =>
-    envelope.kind === 'github_api_rate_limit'
-  );
   let mappedRateLimits = 0;
   if (rateLimitEnvelopes.length > 0 && options.context !== undefined) {
     const context = objectValue(options.context, 'gh-aw JSONL collection context');
@@ -1296,7 +1411,7 @@ export function adaptCachedGhAwJsonl(content, options = {}) {
 
   return {
     observations,
-    records: envelopes.length,
+    records,
     rawPayloadRecords,
     rawRuns: rawRuns.size,
     agenticRunRecords,
@@ -1309,4 +1424,6 @@ export function adaptCachedGhAwJsonl(content, options = {}) {
     rateLimits: rateLimitEnvelopes.length,
     mappedRateLimits
   };
+  };
+  return { accept, finish };
 }

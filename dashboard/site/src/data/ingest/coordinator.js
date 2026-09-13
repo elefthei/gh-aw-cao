@@ -1,5 +1,10 @@
 import { adaptDashboardSources } from '../adapters/dashboard-sources.js';
-import { adaptCachedGhAwJsonl, adaptGhAwLogs } from '../adapters/gh-aw-logs.js';
+import {
+  adaptCachedGhAwJsonl,
+  adaptCachedGhAwJsonlStream,
+  adaptGhAwLogs,
+  cachedJsonlPayloadIdentity
+} from '../adapters/gh-aw-logs.js';
 import { adaptSqlExport } from '../adapters/sql-export.js';
 import { normalize } from '../normalize/index.js';
 import {
@@ -25,15 +30,29 @@ const DASHBOARD_SOURCE_INGESTION_VERSION = 2;
  * @param {string | undefined} identity
  */
 async function payloadHash(payload, identity) {
-  const value = identity ?? (typeof payload === 'string' ? payload : JSON.stringify(payload));
+  const value = identity ?? (
+    typeof payload === 'string' || ArrayBuffer.isView(payload)
+      ? payload
+      : JSON.stringify(payload)
+  );
+  const bytes = typeof value === 'string' ? undefined : /** @type {Uint8Array} */ (value);
   if (globalThis.crypto?.subtle) {
-    const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+    const digest = await globalThis.crypto.subtle.digest(
+      'SHA-256',
+      typeof value === 'string'
+        ? new TextEncoder().encode(value)
+        : /** @type {BufferSource} */ (bytes)
+    );
     return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
   }
   const hashes = Array.from({ length: 8 }, (_, index) => (0x811c9dc5 ^ (index * 0x9e3779b9)) >>> 0);
-  for (let offset = 0; offset < value.length; offset += 1) {
+  const length = typeof value === 'string' ? value.length : /** @type {Uint8Array} */ (bytes).length;
+  for (let offset = 0; offset < length; offset += 1) {
+    const code = typeof value === 'string'
+      ? value.charCodeAt(offset)
+      : /** @type {Uint8Array} */ (bytes)[offset];
     for (let index = 0; index < hashes.length; index += 1) {
-      hashes[index] = Math.imul(hashes[index] ^ value.charCodeAt(offset), 0x01000193 + (index * 2)) >>> 0;
+      hashes[index] = Math.imul(hashes[index] ^ code, 0x01000193 + (index * 2)) >>> 0;
     }
   }
   return hashes.map((hash) => hash.toString(16).padStart(8, '0')).join('');
@@ -227,7 +246,7 @@ export async function ingestGhAwLogs(indexedDB, input, options = {}) {
 /**
  * Incrementally upserts schema-v2 gh-aw cached JSONL into canonical storage.
  * @param {IDBFactory} indexedDB
- * @param {string} content
+ * @param {string | Uint8Array | AsyncIterable<string | Uint8Array>} content
  * @param {{ storage?: StorageManager, now?: number, retentionWindowMs?: number, retentionWindowMsByStore?: Record<string, number>, maxDatabaseBytes?: number, context?: unknown, workflowHints?: { owner: string, repository: string, name: string, path: string }[], payloadIdentity?: string, payloadEtag?: string, payloadScope?: string }} [options]
  */
 export function ingestCachedGhAwJsonl(indexedDB, content, options = {}) {
@@ -236,7 +255,7 @@ export function ingestCachedGhAwJsonl(indexedDB, content, options = {}) {
 
 /**
  * @param {IDBFactory} indexedDB
- * @param {string} content
+ * @param {string | Uint8Array | AsyncIterable<string | Uint8Array>} content
  * @param {{ storage?: StorageManager, now?: number, retentionWindowMs?: number, retentionWindowMsByStore?: Record<string, number>, maxDatabaseBytes?: number, context?: unknown, workflowHints?: { owner: string, repository: string, name: string, path: string }[], payloadIdentity?: string, payloadEtag?: string, payloadScope?: string }} options
  */
 async function ingestCachedGhAwJsonlNow(indexedDB, content, options) {
@@ -246,7 +265,18 @@ async function ingestCachedGhAwJsonlNow(indexedDB, content, options) {
       context: options.context ?? null,
       workflowHints: options.workflowHints ?? []
     });
-    const hash = await payloadHash(`${options.payloadIdentity ?? content}\0${adaptationContext}`, undefined);
+    const streamed = typeof content !== 'string'
+      && !ArrayBuffer.isView(content)
+      && Symbol.asyncIterator in Object(content)
+      ? await adaptCachedGhAwJsonlStream(
+          /** @type {AsyncIterable<string | Uint8Array>} */ (content),
+          { context: options.context, workflowHints: options.workflowHints }
+        )
+      : undefined;
+    const payloadIdentity = options.payloadIdentity
+      ?? streamed?.payloadIdentity
+      ?? cachedJsonlPayloadIdentity(/** @type {string | Uint8Array} */ (content));
+    const hash = await payloadHash(`${payloadIdentity}\0${adaptationContext}`, undefined);
     const scope = options.payloadScope ?? 'gh-aw-jsonl';
     const current = await readCurrentIngestion(indexedDB, 'ingest-jsonl', scope);
     if (current?.payloadHash === hash) {
@@ -260,10 +290,10 @@ async function ingestCachedGhAwJsonlNow(indexedDB, content, options) {
       }
       return { updated: false, skipped: true, committedBatches: 0, committedRecords: 0 };
     }
-    const adapted = adaptCachedGhAwJsonl(content, {
-      context: options.context,
-      workflowHints: options.workflowHints
-    });
+    const adapted = streamed ?? adaptCachedGhAwJsonl(
+      /** @type {string | Uint8Array} */ (content),
+      { context: options.context, workflowHints: options.workflowHints }
+    );
     const result = await ingestCanonicalBatch(indexedDB, normalize(adapted.observations), {
       ...options,
       preserveWorkflowPackageMappings: true,
