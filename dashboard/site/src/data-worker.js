@@ -59,7 +59,8 @@ export function publishWorkerNotification(notification, target = self) {
   target.postMessage({ type: 'notification', notification });
 }
 
-const INGESTION_PROGRESS_INTERVAL_MS = 5_000;
+const INGESTION_PROGRESS_DELAY_MS = 3_000;
+const INGESTION_PROGRESS_INTERVAL_MS = 1_000;
 let nextIngestionProgressId = 0;
 
 /**
@@ -68,16 +69,22 @@ let nextIngestionProgressId = 0;
  */
 export function startIngestionProgress(target = self) {
   const id = `ingestion-progress-${++nextIngestionProgressId}`;
-  let message = 'Ingesting dashboard data.';
+  let message = 'Ingesting data...';
   const report = () => publishWorkerNotification({ id, message, tone: 'info', duration: 0 }, target);
-  const timer = setInterval(report, INGESTION_PROGRESS_INTERVAL_MS);
+  /** @type {ReturnType<typeof setInterval> | undefined} */
+  let interval;
+  const delay = setTimeout(() => {
+    report();
+    interval = setInterval(report, INGESTION_PROGRESS_INTERVAL_MS);
+  }, INGESTION_PROGRESS_DELAY_MS);
   return {
-    /** @param {string} nextMessage */
-    update(nextMessage) {
-      message = nextMessage;
+    /** @param {number} recordsIngested */
+    update(recordsIngested) {
+      message = `Ingesting data... ${recordsIngested} ${recordsIngested === 1 ? 'record' : 'records'} ingested.`;
     },
     complete() {
-      clearInterval(timer);
+      clearTimeout(delay);
+      if (interval) clearInterval(interval);
       publishWorkerNotification({ id, dismiss: true }, target);
     }
   };
@@ -336,14 +343,11 @@ export function processDataRequest(request, signal) {
             if (!response.ok) throw new Error(`Unable to load gh-aw JSONL: ${response.status}`);
             if (!response.body) throw new Error('Unable to stream gh-aw JSONL response body');
             const etag = response.headers.get('etag');
-            progress.update('Ingesting dashboard activity data.');
             const ingestion = await ingestCachedGhAwJsonl(indexedDB, responseChunks(response.body), {
               storage: globalThis.navigator?.storage,
               retentionWindowMsByStore: BROWSER_RETENTION_WINDOWS_MS,
               workflowHints,
-              onProgress: ({ linesProcessed }) => {
-                progress.update(`Ingesting dashboard activity data: ${linesProcessed} records processed.`);
-              },
+              onProgress: ({ recordsIngested }) => progress.update(recordsIngested),
               payloadIdentity: etag ? `${sourceUrl.href}:${etag}` : undefined,
               payloadEtag: etag ?? undefined,
               payloadScope: sourceUrl.href,
@@ -352,7 +356,6 @@ export function processDataRequest(request, signal) {
             changed ||= ingestion.updated;
           }
           if (inventoryResponse.ok) {
-            progress.update('Ingesting dashboard inventory data.');
             const inventoryIngestion = await ingestDashboardSources(indexedDB, sources, {
               storage: globalThis.navigator?.storage,
               retentionWindowMsByStore: BROWSER_RETENTION_WINDOWS_MS,
@@ -361,7 +364,6 @@ export function processDataRequest(request, signal) {
             changed ||= inventoryIngestion.updated;
           }
         } else {
-          progress.update('Ingesting dashboard data.');
           const ingestion = await ingestDashboardSources(indexedDB, sources, {
             storage: globalThis.navigator?.storage,
             retentionWindowMsByStore: BROWSER_RETENTION_WINDOWS_MS,

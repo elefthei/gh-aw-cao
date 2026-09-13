@@ -6,20 +6,32 @@ afterEach(() => {
 });
 
 describe('data-worker ingestion progress', () => {
-  it('reports the latest status every five seconds and dismisses it when complete', () => {
+  it('shows progress after three seconds, updates every second, and dismisses it when complete', () => {
     vi.useFakeTimers();
     const postMessage = vi.fn();
     const progress = startIngestionProgress({ postMessage });
 
-    progress.update('Ingesting dashboard activity data: 42 records processed.');
-    vi.advanceTimersByTime(5_000);
+    progress.update(42);
+    vi.advanceTimersByTime(2_999);
+    expect(postMessage).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
 
     expect(postMessage).toHaveBeenCalledWith({
       type: 'notification',
       notification: expect.objectContaining({
         id: expect.stringMatching(/^ingestion-progress-/),
-        message: 'Ingesting dashboard activity data: 42 records processed.',
+        message: 'Ingesting data... 42 records ingested.',
         duration: 0
+      })
+    });
+
+    progress.update(84);
+    vi.advanceTimersByTime(1_000);
+    expect(postMessage).toHaveBeenLastCalledWith({
+      type: 'notification',
+      notification: expect.objectContaining({
+        message: 'Ingesting data... 84 records ingested.'
       })
     });
 
@@ -28,7 +40,7 @@ describe('data-worker ingestion progress', () => {
       type: 'notification',
       notification: expect.objectContaining({ dismiss: true })
     });
-    vi.advanceTimersByTime(5_000);
-    expect(postMessage).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(1_000);
+    expect(postMessage).toHaveBeenCalledTimes(3);
   });
 });
