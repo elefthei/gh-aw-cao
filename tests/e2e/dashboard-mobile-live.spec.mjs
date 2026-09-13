@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { startDashboardServer } from "../../dashboard/local-server.mjs";
 import { captureMobileDashboardScreenshot } from "./dashboard-screenshot.mjs";
@@ -11,6 +11,133 @@ import {
 
 const maximumDomNodes = 6_000;
 let preview;
+let sourcePayload;
+
+function metricValues(metrics) {
+  return Object.fromEntries(metrics.map(({ name, value }) => [name, value]));
+}
+
+async function processTreeMemory(rootPid = process.pid) {
+  if (process.platform !== "linux") return null;
+  const entries = await readdir("/proc", { withFileTypes: true });
+  const processes = (await Promise.all(entries
+    .filter((entry) => entry.isDirectory() && /^\d+$/.test(entry.name))
+    .map(async (entry) => {
+      try {
+        const status = await readFile(`/proc/${entry.name}/status`, "utf8");
+        return {
+          pid: Number(entry.name),
+          parentPid: Number(/^PPid:\s+(\d+)/m.exec(status)?.[1]),
+          rssBytes: Number(/^VmRSS:\s+(\d+)\s+kB/m.exec(status)?.[1]) * 1024,
+        };
+      } catch {
+        return null;
+      }
+    }))).filter(Boolean);
+  const descendants = new Set([rootPid]);
+  let previousSize = 0;
+  while (descendants.size !== previousSize) {
+    previousSize = descendants.size;
+    for (const candidate of processes) {
+      if (descendants.has(candidate.parentPid)) descendants.add(candidate.pid);
+    }
+  }
+  const children = processes.filter(({ pid }) => pid !== rootPid && descendants.has(pid));
+  const proportionalBytes = await Promise.all(children.map(async ({ pid }) => {
+    try {
+      const rollup = await readFile(`/proc/${pid}/smaps_rollup`, "utf8");
+      return Number(/^Pss:\s+(\d+)\s+kB/m.exec(rollup)?.[1]) * 1024;
+    } catch {
+      return 0;
+    }
+  }));
+  return {
+    processCount: children.length,
+    rssBytes: children.reduce((total, child) => total + child.rssBytes, 0),
+    pssBytes: proportionalBytes.reduce((total, value) => total + value, 0),
+  };
+}
+
+async function startMemoryInvestigation(page, browserIsChromium) {
+  const session = browserIsChromium ? await page.context().newCDPSession(page) : null;
+  await session?.send("Performance.enable");
+  const startedAt = performance.now();
+  const samples = [];
+  let active = true;
+  let interval;
+  let pending = Promise.resolve();
+  let samplingError = null;
+
+  const capture = async (phase) => {
+    const [performanceMetrics, dom, processes] = await Promise.all([
+      session?.send("Performance.getMetrics") ?? null,
+      session?.send("Memory.getDOMCounters") ?? null,
+      processTreeMemory(),
+    ]);
+    const values = metricValues(performanceMetrics?.metrics ?? []);
+    samples.push({
+      elapsedMs: Number((performance.now() - startedAt).toFixed(2)),
+      phase,
+      jsHeapUsedSize: values.JSHeapUsedSize ?? null,
+      jsHeapTotalSize: values.JSHeapTotalSize ?? null,
+      documents: dom?.documents ?? null,
+      nodes: dom?.nodes ?? null,
+      jsEventListeners: dom?.jsEventListeners ?? null,
+      processTreeRssBytes: processes?.rssBytes ?? null,
+      processTreePssBytes: processes?.pssBytes ?? null,
+      processCount: processes?.processCount ?? null,
+    });
+  };
+  const scheduleCapture = (phase) => {
+    pending = pending.then(() => active ? capture(phase) : undefined).catch((error) => {
+      samplingError ??= error instanceof Error ? error.message : String(error);
+    });
+    return pending;
+  };
+  await scheduleCapture("before-navigation");
+  interval = setInterval(() => void scheduleCapture("loading"), 250);
+  page.once("close", () => {
+    active = false;
+    clearInterval(interval);
+  });
+
+  return {
+    session,
+    mark: scheduleCapture,
+    stop: async () => {
+      active = false;
+      clearInterval(interval);
+      await pending;
+      await capture("settled");
+      if (session) {
+        await session.send("HeapProfiler.collectGarbage");
+        await capture("after-garbage-collection");
+        await session.send("Performance.disable");
+      }
+      const peakJsHeap = samples.reduce((maximum, sample) =>
+        (sample.jsHeapUsedSize ?? 0) > (maximum.jsHeapUsedSize ?? 0) ? sample : maximum
+      , samples[0]);
+      const peakProcessTreeRss = samples.reduce((maximum, sample) =>
+        (sample.processTreeRssBytes ?? 0) > (maximum.processTreeRssBytes ?? 0) ? sample : maximum
+      , samples[0]);
+      const peakProcessTreePss = samples.reduce((maximum, sample) =>
+        (sample.processTreePssBytes ?? 0) > (maximum.processTreePssBytes ?? 0) ? sample : maximum
+      , samples[0]);
+      return {
+        supported: process.platform === "linux",
+        jsHeapSupported: Boolean(session),
+        samplingIntervalMs: 250,
+        peakJsHeap,
+        peakProcessTreeRss,
+        peakProcessTreePss,
+        settled: samples.findLast(({ phase }) => phase === "settled"),
+        afterGarbageCollection: samples.findLast(({ phase }) => phase === "after-garbage-collection") ?? null,
+        samplingError,
+        samples,
+      };
+    },
+  };
+}
 
 function optionalNumber(name) {
   const value = process.env[name];
@@ -48,10 +175,24 @@ test.beforeAll(async () => {
   if (!dataUrl) throw new Error("DASHBOARD_DATA_URL is required.");
   preview = await startDashboardServer({
     downloadData: async (destination) => {
-      const response = await fetch(dataUrl);
-      if (!response.ok) throw new Error(`Unable to download deployed dashboard data: HTTP ${response.status}.`);
+      const inventoryUrl = new URL("inventory-sources.json", dataUrl);
+      const [logsResponse, inventoryResponse] = await Promise.all([
+        fetch(dataUrl),
+        fetch(inventoryUrl),
+      ]);
+      if (!logsResponse.ok) throw new Error(`Unable to download deployed dashboard data: HTTP ${logsResponse.status}.`);
+      if (!inventoryResponse.ok) throw new Error(`Unable to download deployed dashboard inventory: HTTP ${inventoryResponse.status}.`);
+      const [logs, inventory] = await Promise.all([logsResponse.text(), inventoryResponse.text()]);
+      sourcePayload = {
+        activityBytes: Buffer.byteLength(logs),
+        inventoryBytes: Buffer.byteLength(inventory),
+        totalBytes: Buffer.byteLength(logs) + Buffer.byteLength(inventory),
+      };
       await mkdir(destination, { recursive: true });
-      await writeFile(join(destination, "sources.json"), await response.text());
+      await Promise.all([
+        writeFile(join(destination, "gh-aw-logs.jsonl"), logs),
+        writeFile(join(destination, "inventory-sources.json"), inventory),
+      ]);
     },
     host: "127.0.0.1",
     port: 0,
@@ -65,8 +206,8 @@ test.afterAll(async () => {
 test("latest dashboard data loads within the mobile DOM budget", async ({ page }, testInfo) => {
   const pageErrors = [];
   let crashed = false;
-  let sourcesResponse;
-  let sourceManifestResponse;
+  let logsResponse;
+  let inventoryResponse;
   const memoryMb = optionalNumber("MOBILE_MEMORY_MB");
   const network = {
     downloadKbps: optionalNumber("MOBILE_NETWORK_DOWNLOAD_KBPS"),
@@ -79,9 +220,10 @@ test("latest dashboard data loads within the mobile DOM budget", async ({ page }
     (memoryMb !== null || networkIsConstrained) && !browserIsChromium,
     "Restricted memory and network throttling constraints require Chromium; running this profile on another browser would silently skip the constraint.",
   );
+  const memoryInvestigation = await startMemoryInvestigation(page, browserIsChromium);
   if (networkIsConstrained) {
     expect(Object.values(network), "All network constraint values are required").not.toContain(null);
-    const session = await page.context().newCDPSession(page);
+    const session = memoryInvestigation.session;
     await session.send("Network.enable");
     await session.send("Network.emulateNetworkConditions", {
       offline: false,
@@ -99,26 +241,25 @@ test("latest dashboard data loads within the mobile DOM budget", async ({ page }
   });
   page.on("response", (response) => {
     const pathname = new URL(response.url()).pathname;
-    if (pathname.endsWith("/sources.json")) {
-      sourcesResponse = response;
-    } else if (pathname.endsWith("/sources/manifest.json")) {
-      sourceManifestResponse = response;
-    }
+    if (pathname.endsWith("/gh-aw-logs.jsonl")) logsResponse = response;
+    if (pathname.endsWith("/inventory-sources.json")) inventoryResponse = response;
   });
 
   await page.goto(`${preview.url}/?debug=1`, { waitUntil: "domcontentloaded" });
   const dashboard = page.locator(".dashboard-root");
   await expect(dashboard).toBeVisible();
+  await memoryInvestigation.mark("dashboard-visible");
   await expect(dashboard).not.toHaveAttribute("aria-busy", "true", { timeout: 120_000 });
+  await memoryInvestigation.mark("dashboard-idle");
   // DOM provenance annotation (`data-json-path`/`data-js-view`) is lazily
   // loaded and applied asynchronously; wait for it so the DOM analysis below
   // can attribute node counts to their owning JSON view.
   await expect(dashboard).toHaveAttribute("data-json-path", "$.dashboard", { timeout: 30_000 });
 
-  const sourceIndexResponse = sourceManifestResponse;
-  expect(sourceIndexResponse, "The dashboard must request the split source manifest").toBeDefined();
-  expect(sourceIndexResponse?.ok(), `Dashboard source manifest returned ${sourceIndexResponse?.status()}`).toBe(true);
-  expect(sourcesResponse, "The dashboard must avoid fetching the monolithic sources.json when the manifest is available").toBeUndefined();
+  expect(logsResponse, "The dashboard must request canonical activity data").toBeDefined();
+  expect(logsResponse?.ok(), `Dashboard activity data returned ${logsResponse?.status()}`).toBe(true);
+  expect(inventoryResponse, "The dashboard must request inventory sources").toBeDefined();
+  expect(inventoryResponse?.ok(), `Dashboard inventory returned ${inventoryResponse?.status()}`).toBe(true);
   expect(crashed, "The mobile browser page crashed while rendering the dashboard").toBe(false);
   expect(pageErrors, "The dashboard emitted browser errors").toEqual([]);
 
@@ -209,6 +350,15 @@ test("latest dashboard data loads within the mobile DOM budget", async ({ page }
   const runtime = await page.evaluate(() => {
     const navigation = performance.getEntriesByType("navigation")[0];
     const memory = performance.memory;
+    const resources = performance.getEntriesByType("resource")
+      .filter(({ name }) => /\/(?:gh-aw-logs\.jsonl|inventory-sources\.json|dashboard\.json)$/.test(new URL(name).pathname))
+      .map(({ name, duration, transferSize, encodedBodySize, decodedBodySize }) => ({
+        name: new URL(name).pathname.split("/").at(-1),
+        durationMs: Number(duration.toFixed(2)),
+        transferSize,
+        encodedBodySize,
+        decodedBodySize,
+      }));
     return {
       navigation: navigation ? {
         domContentLoadedMs: Number(navigation.domContentLoadedEventEnd.toFixed(2)),
@@ -221,8 +371,10 @@ test("latest dashboard data loads within the mobile DOM budget", async ({ page }
         totalJSHeapSize: memory.totalJSHeapSize,
         usedJSHeapSize: memory.usedJSHeapSize,
       } : null,
+      resources,
     };
   });
+  const memory = await memoryInvestigation.stop();
   const analysis = {
     profile: process.env.MOBILE_PROFILE ?? "baseline",
     device: process.env.MOBILE_DEVICE,
@@ -232,6 +384,8 @@ test("latest dashboard data loads within the mobile DOM budget", async ({ page }
       network: networkIsConstrained ? network : null,
     },
     runtime,
+    sourcePayload,
+    memory,
     dom: summarizeDomTree(domTree.nodes, domTree.structures),
     accessibility,
     mobileAccessibility: summarizeMobileAccessibility({
