@@ -309,7 +309,7 @@ describe('declarative dashboard queries', () => {
       source,
       ['recent-runs'],
       { pagination: { 'recent-runs': { limit: 1, continuationToken: first.continuationToken } } }
-    )).toThrow('Invalid or stale continuation token');
+    )['recent-runs']).toThrow('Invalid or stale continuation token');
     expect(() => executeDashboardQueries(
       query,
       {
@@ -320,7 +320,7 @@ describe('declarative dashboard queries', () => {
       },
       ['recent-runs'],
       { pagination: { 'recent-runs': { limit: 1, continuationToken: first.continuationToken } } }
-    )).toThrow('Invalid or stale continuation token');
+    )['recent-runs']).toThrow('Invalid or stale continuation token');
   });
 
   it('projects, renames, and orders rows deterministically', () => {
@@ -344,7 +344,7 @@ describe('declarative dashboard queries', () => {
     const end = vi.spyOn(console, 'timeEnd').mockImplementation(() => {});
 
     try {
-      executeDashboardQuery({
+      const result = executeDashboardQuery({
         name: 'timed-inventory',
         from: 'workflows',
         joins: [{
@@ -360,6 +360,7 @@ describe('declarative dashboard queries', () => {
         'order-by': [{ field: 'aic', direction: 'desc' }],
         limit: 1
       }, { workflows, usage: { ...usage, rows: [usage.rows[0]] } });
+      result.rows;
 
       const labels = [
         'from',
@@ -1205,6 +1206,313 @@ describe('declarative dashboard queries', () => {
     expect(Object.keys(derived)).toEqual(['totals']);
   });
 
+  it('defers every requested query until its result is consumed', () => {
+    const budget = createDashboardQueryBudget();
+    const derived = executeDashboardQueries(
+      [
+        { name: 'totals', from: 'usage', aggregate: { by: ['workflow'], values: [{ field: 'aic', as: 'aic', reducer: 'sum' }] } },
+        { name: 'inventory', from: 'workflows', select: [{ field: 'workflow' }] }
+      ],
+      { workflows, usage },
+      undefined,
+      { budget }
+    );
+
+    expect(Object.keys(derived)).toEqual(['totals', 'inventory']);
+    expect(budget.operations).toBe(0);
+
+    expect(derived.totals.rows).toEqual([{ workflow: 'a.md', aic: 10 }]);
+    expect(budget.operations).toBe(4);
+
+    expect(derived.totals.metadata.availability).toBe('available');
+    expect(budget.operations).toBe(4);
+
+    expect(derived.inventory.rows).toEqual([{ workflow: 'a.md' }, { workflow: 'b.md' }]);
+    expect(budget.operations).toBe(8);
+  });
+
+  it('defers a single query until its rows or metadata are consumed', () => {
+    const budget = createDashboardQueryBudget();
+    const result = executeDashboardQuery(
+      { name: 'totals', from: 'usage', aggregate: { by: ['workflow'], values: [{ field: 'aic', as: 'aic', reducer: 'sum' }] } },
+      { usage },
+      undefined,
+      budget
+    );
+
+    expect(result.source).toBe('totals');
+    expect(budget.operations).toBe(0);
+
+    expect(result.metadata.availability).toBe('available');
+    expect(budget.operations).toBe(4);
+
+    const rows = result.rows;
+    const resultMetadata = result.metadata;
+    expect(rows).toEqual([{ workflow: 'a.md', aic: 10 }]);
+    expect(result.rows).toBe(rows);
+    expect(result.metadata).toBe(resultMetadata);
+    expect(budget.operations).toBe(4);
+  });
+
+  it('does not read source rows or metadata while creating or enumerating queries', () => {
+    const rows = vi.fn(() => usage.rows);
+    const sourceMetadata = vi.fn(() => usage.metadata);
+    const source = {
+      source: 'usage',
+      get rows() {
+        return rows();
+      },
+      get metadata() {
+        return sourceMetadata();
+      }
+    };
+
+    const derived = executeDashboardQueries(
+      [{ name: 'totals', from: 'usage', aggregate: { by: ['workflow'], values: [{ field: 'aic', as: 'aic', reducer: 'sum' }] } }],
+      { usage: source },
+      ['totals']
+    );
+
+    expect(Object.keys(derived)).toEqual(['totals']);
+    expect(Object.getOwnPropertyDescriptor(derived, 'totals')?.get).toEqual(expect.any(Function));
+    expect(rows).not.toHaveBeenCalled();
+    expect(sourceMetadata).not.toHaveBeenCalled();
+
+    expect(derived.totals.rows).toEqual([{ workflow: 'a.md', aic: 10 }]);
+    const rowReads = rows.mock.calls.length;
+    const metadataReads = sourceMetadata.mock.calls.length;
+    expect(rowReads).toBeGreaterThan(0);
+    expect(metadataReads).toBeGreaterThan(0);
+    derived.totals.metadata;
+    expect(rows).toHaveBeenCalledTimes(rowReads);
+    expect(sourceMetadata).toHaveBeenCalledTimes(metadataReads);
+  });
+
+  it('never consumes unrequested or unobserved queries', () => {
+    const usageRows = vi.fn(() => usage.rows);
+    const workflowRows = vi.fn(() => workflows.rows);
+    const workflowMetadata = vi.fn(() => workflows.metadata);
+    const sources = {
+      usage: { ...usage, get rows() { return usageRows(); } },
+      workflows: {
+        ...workflows,
+        get rows() { return workflowRows(); },
+        get metadata() { return workflowMetadata(); }
+      }
+    };
+    const definitions = [
+      { name: 'totals', from: 'usage', select: [{ field: 'workflow' }] },
+      { name: 'inventory', from: 'workflows', select: [{ field: 'workflow' }] }
+    ];
+
+    const requested = executeDashboardQueries(definitions, sources, ['totals']);
+    expect(Object.keys(requested)).toEqual(['totals']);
+    expect(workflowRows).not.toHaveBeenCalled();
+    expect(workflowMetadata).not.toHaveBeenCalled();
+
+    requested.totals.rows;
+    expect(usageRows).toHaveBeenCalled();
+    expect(workflowRows).not.toHaveBeenCalled();
+    expect(workflowMetadata).not.toHaveBeenCalled();
+
+    const all = executeDashboardQueries(definitions, sources);
+    all.totals.rows;
+    expect(workflowRows).not.toHaveBeenCalled();
+    expect(workflowMetadata).not.toHaveBeenCalled();
+  });
+
+  it('materializes shared dependencies only once as lazy results are consumed', () => {
+    const budget = createDashboardQueryBudget();
+    const derived = executeDashboardQueries(
+      [
+        { name: 'base', from: 'usage', select: [{ field: 'workflow' }] },
+        { name: 'dependent', from: 'base', select: [{ field: 'workflow' }] }
+      ],
+      { usage },
+      undefined,
+      { budget }
+    );
+
+    expect(derived.dependent.rows).toEqual([{ workflow: 'a.md' }, { workflow: 'a.md' }]);
+    expect(derived.base.rows).toEqual([{ workflow: 'a.md' }, { workflow: 'a.md' }]);
+    expect(budget.operations).toBe(8);
+  });
+
+  it('keeps repeated query batches lazy and isolated from earlier materializations', () => {
+    const definition = [{ name: 'inventory', from: 'workflows', select: [{ field: 'workflow' }] }];
+    const firstBudget = createDashboardQueryBudget();
+    const secondBudget = createDashboardQueryBudget();
+    const first = executeDashboardQueries(definition, { workflows }, undefined, { budget: firstBudget });
+
+    expect(first.inventory.rows).toEqual([{ workflow: 'a.md' }, { workflow: 'b.md' }]);
+    expect(firstBudget.operations).toBe(4);
+
+    workflows.rows.push({ organization: 'githubnext', repository: 'gh-aw-cao', workflow: 'c.md' });
+    try {
+      const second = executeDashboardQueries(definition, { workflows }, undefined, { budget: secondBudget });
+
+      expect(secondBudget.operations).toBe(0);
+      expect(first.inventory.rows).toEqual([{ workflow: 'a.md' }, { workflow: 'b.md' }]);
+      expect(firstBudget.operations).toBe(4);
+      expect(second.inventory.rows).toEqual([
+        { workflow: 'a.md' },
+        { workflow: 'b.md' },
+        { workflow: 'c.md' }
+      ]);
+      expect(secondBudget.operations).toBe(6);
+    } finally {
+      workflows.rows.pop();
+    }
+  });
+
+  it('memoizes a lazy execution failure instead of rerunning the query', () => {
+    const budget = createDashboardQueryBudget({ maxOperations: 1 });
+    const result = executeDashboardQueries(
+      [{ name: 'totals', from: 'usage', aggregate: { by: ['workflow'], values: [{ field: 'aic', as: 'aic', reducer: 'sum' }] } }],
+      { usage },
+      undefined,
+      { budget }
+    ).totals;
+
+    let firstError;
+    try {
+      result.rows;
+    } catch (error) {
+      firstError = error;
+    }
+    expect(firstError).toBeInstanceOf(DashboardQueryCancelledError);
+    expect(budget.operations).toBe(2);
+
+    expect(() => result.metadata).toThrow(firstError);
+    expect(budget.operations).toBe(2);
+  });
+
+  it('isolates a lazy query failure from unconsumed sibling queries', () => {
+    const derived = executeDashboardQueries(
+      [
+        { name: 'broken', from: 'broken-source', select: [{ field: 'workflow' }] },
+        { name: 'inventory', from: 'workflows', select: [{ field: 'workflow' }] }
+      ],
+      {
+        workflows,
+        'broken-source': {
+          source: 'broken-source',
+          /** @returns {Record<string, unknown>[]} */
+          get rows() {
+            throw new Error('source read failed');
+          },
+          metadata: metadata('broken-source')
+        }
+      }
+    );
+
+    expect(() => derived.broken.rows).toThrow('source read failed');
+    expect(Object.keys(derived)).toEqual(['broken', 'inventory']);
+    expect(derived.inventory.rows).toEqual([{ workflow: 'a.md' }, { workflow: 'b.md' }]);
+  });
+
+  it('defers structural rejection until the rejected query is consumed', () => {
+    const rows = vi.fn(() => workflows.rows);
+    const result = executeDashboardQueries(
+      [{ name: 'invalid', from: 'workflows', joins: [{ source: 'usage', on: [], fields: [] }] }],
+      {
+        workflows: { ...workflows, get rows() { return rows(); } },
+        usage
+      }
+    );
+
+    expect(rows).not.toHaveBeenCalled();
+    expect(result.invalid.metadata).toMatchObject({
+      availability: 'unavailable',
+      'query-diagnostic': expect.stringContaining('declares no equality keys')
+    });
+    expect(rows).not.toHaveBeenCalled();
+  });
+
+  it('defers continuation validation and re-execution until a page is consumed', () => {
+    const definitions = [{ name: 'recent-runs', from: 'runs', 'order-by': [{ field: 'run', direction: 'desc' }] }];
+    const sources = {
+      runs: {
+        source: 'runs',
+        rows: ['3', '2', '1'].map((run) => ({ run })),
+        metadata: metadata('runs')
+      }
+    };
+    const first = executeDashboardQueries(definitions, sources, ['recent-runs'], {
+      pagination: { 'recent-runs': { limit: 1 } }
+    })['recent-runs'];
+    const budget = createDashboardQueryBudget();
+    const continued = executeDashboardQueries(definitions, sources, ['recent-runs'], {
+      budget,
+      pagination: { 'recent-runs': { limit: 1, continuationToken: first.continuationToken } }
+    });
+
+    expect(budget.operations).toBe(0);
+    expect(continued['recent-runs'].rows).toEqual([{ run: '2' }]);
+    expect(budget.operations).toBe(6);
+  });
+
+  it('does not read unrelated source metadata for a paginated query', () => {
+    const definitions = [{ name: 'recent-runs', from: 'runs', 'order-by': [{ field: 'run', direction: 'desc' }] }];
+    const result = executeDashboardQueries(definitions, {
+      runs: {
+        source: 'runs',
+        rows: ['2', '1'].map((run) => ({ run })),
+        metadata: metadata('runs')
+      },
+      unrelated: {
+        source: 'unrelated',
+        rows: [],
+        /** @returns {import('../../src/presenter.js').SourceMetadata} */
+        get metadata() {
+          throw new Error('unrelated metadata was consumed');
+        }
+      }
+    }, ['recent-runs'], {
+      pagination: { 'recent-runs': { limit: 1 } }
+    });
+
+    expect(result['recent-runs'].rows).toEqual([{ run: '2' }]);
+  });
+
+  it('consumes each lazy query once when the batch crosses the structured-clone boundary', () => {
+    const budget = createDashboardQueryBudget();
+    const derived = executeDashboardQueries(
+      [
+        { name: 'base', from: 'usage', select: [{ field: 'workflow' }] },
+        { name: 'dependent', from: 'base', select: [{ field: 'workflow' }] }
+      ],
+      { usage },
+      undefined,
+      { budget }
+    );
+
+    expect(budget.operations).toBe(0);
+    const cloned = structuredClone(derived);
+    expect(cloned.base.rows).toEqual([{ workflow: 'a.md' }, { workflow: 'a.md' }]);
+    expect(cloned.dependent.rows).toEqual([{ workflow: 'a.md' }, { workflow: 'a.md' }]);
+    expect(budget.operations).toBe(8);
+
+    structuredClone(derived);
+    expect(budget.operations).toBe(8);
+  });
+
+  it.each(['constructor', '__proto__'])('lazily executes a query named %s', (name) => {
+    const budget = createDashboardQueryBudget();
+    const derived = executeDashboardQueries(
+      [{ name, from: 'workflows', select: [{ field: 'workflow' }] }],
+      { workflows },
+      undefined,
+      { budget }
+    );
+
+    expect(budget.operations).toBe(0);
+    expect(derived[name].rows).toEqual([{ workflow: 'a.md' }, { workflow: 'b.md' }]);
+    expect(budget.operations).toBe(4);
+    expect(structuredClone(derived)[name].rows).toEqual([{ workflow: 'a.md' }, { workflow: 'b.md' }]);
+    expect(budget.operations).toBe(4);
+  });
+
   it('rejects cyclic, self-referencing, and forward query dependencies', () => {
     const defects = dashboardQueryDefects([
       { name: 'self', from: 'self' },
@@ -1314,7 +1622,7 @@ describe('query cancellation, deadlines, and operation budgets', () => {
     const controller = new AbortController();
     controller.abort();
 
-    expect(() => executeDashboardQueries([totals], { usage }, undefined, { signal: controller.signal }))
+    expect(() => executeDashboardQueries([totals], { usage }, undefined, { signal: controller.signal }).totals.rows)
       .toThrow(DashboardQueryCancelledError);
   });
 
@@ -1322,7 +1630,7 @@ describe('query cancellation, deadlines, and operation budgets', () => {
     const controller = new AbortController();
     controller.abort();
     try {
-      executeDashboardQueries([totals], { usage }, undefined, { signal: controller.signal });
+      executeDashboardQueries([totals], { usage }, undefined, { signal: controller.signal }).totals.rows;
       expect.unreachable('cancelled execution must not return a projection');
     } catch (error) {
       expect(/** @type {DashboardQueryCancelledError} */ (error).kind).toBe('aborted');
@@ -1334,20 +1642,20 @@ describe('query cancellation, deadlines, and operation budgets', () => {
     let clock = 0;
     const budget = createDashboardQueryBudget({ timeout: 60000, now: () => (clock += 40000) });
 
-    expect(() => executeDashboardQueries([totals], { usage }, undefined, { budget }))
+    expect(() => executeDashboardQueries([totals], { usage }, undefined, { budget }).totals.rows)
       .toThrow(/max-duration-ms limit of 60000/);
   });
 
   it('stops a runaway computation once the operation budget is spent', () => {
     const budget = createDashboardQueryBudget({ maxOperations: 1 });
 
-    expect(() => executeDashboardQueries([totals], { usage }, undefined, { budget }))
+    expect(() => executeDashboardQueries([totals], { usage }, undefined, { budget }).totals.rows)
       .toThrow(/max-operations budget of 1/);
   });
 
   it('counts the row operations a query performs', () => {
     const budget = createDashboardQueryBudget();
-    executeDashboardQueries([totals], { usage }, undefined, { budget });
+    executeDashboardQueries([totals], { usage }, undefined, { budget }).totals.rows;
 
     expect(budget.operations).toBe(4);
   });
@@ -1361,11 +1669,11 @@ describe('query cancellation, deadlines, and operation budgets', () => {
     const controller = new AbortController();
     controller.abort();
 
-    expect(() => processDataRequest({
+    expect(() => /** @type {Record<string, import('../../src/presenter.js').LogicalSourceInput>} */ (processDataRequest({
       operation: 'execute-dashboard-queries',
       queries: [totals],
       sources: { usage }
-    }, controller.signal)).toThrow(DashboardQueryCancelledError);
+    }, controller.signal)).totals.rows).toThrow(DashboardQueryCancelledError);
   });
 });
 

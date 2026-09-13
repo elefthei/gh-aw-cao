@@ -90,7 +90,7 @@ describe('canonical dashboard worker retention updates', () => {
         listeners.set(type, listener);
       },
       postMessage: (/** @type {Record<string, unknown>} */ message) => {
-        posted.push(message);
+        posted.push(structuredClone(message));
       }
     }));
     await import('../../src/data-worker.js');
@@ -172,5 +172,26 @@ describe('canonical dashboard worker retention updates', () => {
     expect(firstJsonl?.data).toMatchObject({ changed: true });
     expect(repeatedJsonl?.data).toMatchObject({ changed: false });
     expect(new Headers(jsonlRequests[1]?.headers).get('If-None-Match')).toBe('"generation-b"');
+
+    dispatch({
+      id: 5,
+      operation: 'execute-dashboard-queries',
+      queries: context.queries,
+      sources: {
+        events: {
+          source: 'events',
+          /** @returns {Record<string, unknown>[]} */
+          get rows() {
+            throw new Error('source read failed');
+          },
+          metadata
+        }
+      }
+    });
+
+    expect(await settled((message) => message.id === 5)).toMatchObject({
+      cancelled: false,
+      error: 'source read failed'
+    });
   });
 });

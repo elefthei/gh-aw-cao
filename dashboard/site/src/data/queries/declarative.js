@@ -430,9 +430,8 @@ export function dashboardQueryOutputFields(definition, fieldsOf) {
 }
 
 /**
- * Executes declared queries against already loaded logical sources.
- * Queries are executed in declaration order so a query may consume an
- * earlier query's output.
+ * Creates lazy declared queries over already loaded logical sources.
+ * Each query and its dependencies execute when that result is first consumed.
  *
  * @param {unknown} definitions
  * @param {Record<string, LogicalSourceInput>} sources
@@ -444,47 +443,52 @@ export function executeDashboardQueries(definitions, sources, requested, options
   const index = dashboardQueryIndex(definitions);
   if (index.size === 0) return {};
   const defects = dashboardQueryDefects(definitions);
-  const budget = options.budget ?? createDashboardQueryBudget(options);
-  const revision = continuationRevision(definitions, Object.fromEntries(
-    Object.entries(sources).map(([name, source]) => [name, source.metadata])
-  ));
-  if (requested) {
-    /** @type {Record<string, LogicalSourceInput>} */
-    const requestedResults = {};
-    for (const name of new Set(requested)) {
-      if (!index.has(name)) continue;
-      const compiled = compileDashboardQuery(name, index, sources, defects, budget);
-      requestedResults[name] = compiled[name];
-    }
-    return paginateDashboardSources(requestedResults, options.pagination, revision);
-  }
+  /** @type {QueryBudget | undefined} */
+  let budget = options.budget;
+  const queryBudget = () => (budget ??= createDashboardQueryBudget(options));
   /** @type {Record<string, LogicalSourceInput>} */
   const derived = {};
-  for (const [name, definition] of index) {
-    budget.checkpoint();
-    derived[name] = executeDashboardQuery(definition, { ...sources, ...derived }, defects.get(name), budget);
+  /** @type {Record<string, LogicalSourceInput>} */
+  const compiled = Object.create(null);
+  const visiting = new Set();
+  const names = requested ? new Set(requested) : index.keys();
+  for (const name of names) {
+    if (!index.has(name)) continue;
+    defineLazyProperty(derived, name, () => {
+      compileDashboardQuery(name, index, sources, defects, queryBudget(), compiled, visiting);
+      const page = options.pagination?.[name];
+      if (!page) return compiled[name];
+      const required = new Set(resolveDashboardQuerySources(definitions, [name]));
+      return paginateDashboardSources(
+        { [name]: compiled[name] },
+        { [name]: page },
+        continuationRevision(definitions, Object.fromEntries(
+          Object.entries(sources)
+            .filter(([sourceName]) => required.has(sourceName))
+            .map(([sourceName, source]) => [sourceName, source.metadata])
+        ))
+      )[name];
+    });
   }
-  return paginateDashboardSources(derived, options.pagination, revision);
+  return derived;
 }
 
 /**
- * Recompiles one requested query and its dependencies in an isolated working
- * set. Shared dependencies may be recomputed for another requested query so
- * completed result graphs do not accumulate in worker memory.
+ * Compiles one consumed query and its dependencies into a shared working set
+ * so dependencies are materialized at most once per batch.
  *
  * @param {string} name
  * @param {Map<string, DashboardQuery>} index
  * @param {Record<string, LogicalSourceInput>} sources
  * @param {Map<string, string>} defects
  * @param {QueryBudget} budget
+ * @param {Record<string, LogicalSourceInput>} compiled
+ * @param {Set<string>} visiting
  */
-function compileDashboardQuery(name, index, sources, defects, budget) {
-  /** @type {Record<string, LogicalSourceInput>} */
-  const compiled = {};
-  const visiting = new Set();
+function compileDashboardQuery(name, index, sources, defects, budget, compiled, visiting) {
   /** @param {string} queryName */
   const compile = (queryName) => {
-    if (compiled[queryName] || visiting.has(queryName)) return;
+    if (Object.hasOwn(compiled, queryName) || visiting.has(queryName)) return;
     const definition = index.get(queryName);
     if (!definition) return;
     visiting.add(queryName);
@@ -511,7 +515,33 @@ function compileDashboardQuery(name, index, sources, defects, budget) {
  * @param {QueryBudget} [budget] shared cancellation, deadline, and operation budget
  * @returns {LogicalSourceInput}
  */
-export function executeDashboardQuery(definition, sources, defect, budget = createDashboardQueryBudget()) {
+export function executeDashboardQuery(definition, sources, defect, budget) {
+  let queryBudget = budget;
+  const consume = lazyValue(() => materializeDashboardQuery(
+    definition,
+    sources,
+    defect,
+    queryBudget ??= createDashboardQueryBudget()
+  ));
+  return /** @type {LogicalSourceInput} */ ({
+    source: definition.name,
+    get rows() {
+      return consume().rows;
+    },
+    get metadata() {
+      return consume().metadata;
+    }
+  });
+}
+
+/**
+ * @param {DashboardQuery} definition
+ * @param {Record<string, LogicalSourceInput>} sources
+ * @param {string | undefined} defect
+ * @param {QueryBudget} budget
+ * @returns {LogicalSourceInput}
+ */
+function materializeDashboardQuery(definition, sources, defect, budget) {
   const inputs = queryInputNames(definition).map((name) => ({ name, source: sources[name] }));
   const rejected = defect ?? queryStructuralDefect(definition);
   if (rejected) {
@@ -539,6 +569,7 @@ export function executeDashboardQuery(definition, sources, defect, budget = crea
         effectiveSources[name] = { ...source, source: source?.source ?? name, rows: [] };
       }
     }
+
     const rows = runDashboardQuery(definition, effectiveSources, budget);
     return {
       source: definition.name,
@@ -553,6 +584,48 @@ export function executeDashboardQuery(definition, sources, defect, budget = crea
       error instanceof Error ? error.message : String(error)
     );
   }
+}
+
+/**
+ * Defines an enumerable property whose value is computed at most once, when read.
+ *
+ * @template T
+ * @param {Record<string, T>} target
+ * @param {string} name
+ * @param {() => T} consume
+ */
+function defineLazyProperty(target, name, consume) {
+  const value = lazyValue(consume);
+  Object.defineProperty(target, name, {
+    enumerable: true,
+    get: value
+  });
+}
+
+/**
+ * @template T
+ * @param {() => T} consume
+ * @returns {() => T}
+ */
+function lazyValue(consume) {
+  let state = 'pending';
+  /** @type {T | undefined} */
+  let value;
+  /** @type {unknown} */
+  let failure;
+  return () => {
+    if (state === 'pending') {
+      try {
+        value = consume();
+        state = 'resolved';
+      } catch (error) {
+        failure = error;
+        state = 'rejected';
+      }
+    }
+    if (state === 'rejected') throw failure;
+    return /** @type {T} */ (value);
+  };
 }
 
 /**
