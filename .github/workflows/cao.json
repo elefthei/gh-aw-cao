@@ -14,12 +14,11 @@
         "github/gh-aw-mcpg",
         "github/gh-aw-actions",
         "github/gh-aw-threat-detection",
-        "githubnext/gh-aw-cao",
-        "githubnext/gh-aw-workshop"
+        "githubnext/gh-aw-cao"
       ]
     },
     "defaults": {
-      "max-repositories": 7
+      "max-repositories": 6
     },
     "web": {
       "favicon": "./favicon.svg"
@@ -41,6 +40,9 @@
         "mode": "review",
         "max-repositories": 1,
         "workers": {
+          "catalog-advisor": {
+            "workflow": "cao-evolution-catalog-advisor"
+          },
           "compiler-security": {
             "workflow": "cao-evolution-compiler-security"
           },
