@@ -1,0 +1,217 @@
+name: GitHub Actions lint
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/**"
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      failed: ${{ steps.result.outputs.failed }}
+      actionlint-failed: ${{ steps.result.outputs.actionlint-failed }}
+      zizmor-failed: ${{ steps.result.outputs.zizmor-failed }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run actionlint and zizmor
+        id: lint
+        continue-on-error: true
+        shell: bash
+        run: |
+          mapfile -d '' files < <(
+            find .github/workflows .github/actions -type f \
+              \( -name '*.yml' -o -name '*.yaml' \) \
+              ! -name '*.lock.yml' -print0 | sort -z
+          )
+
+          set +e
+          set -o pipefail
+          docker run --rm --network none --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --volume "$PWD:/repo:ro" --workdir /repo \
+            rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
+            "${files[@]}" 2>&1 | tee /tmp/actionlint.txt
+          actionlint_status=${PIPESTATUS[0]}
+
+          docker run --rm --network none --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --volume "$PWD:/repo:ro" --workdir /repo \
+            ghcr.io/zizmorcore/zizmor:1.30.1@sha256:a2eb396d886c053073405c7a980f2139ba2248ec172243cfa3841e57196e8101 \
+            --format plain "${files[@]}" 2>&1 | tee /tmp/zizmor.txt
+          zizmor_status=${PIPESTATUS[0]}
+
+          echo "actionlint-status=$actionlint_status" >> "$GITHUB_OUTPUT"
+          echo "zizmor-status=$zizmor_status" >> "$GITHUB_OUTPUT"
+          if (( actionlint_status != 0 || zizmor_status != 0 )); then
+            exit 1
+          fi
+
+      - name: Record lint result
+        id: result
+        if: always()
+        env:
+          LINT_FAILED: ${{ steps.lint.outcome == 'failure' }}
+          ACTIONLINT_STATUS: ${{ steps.lint.outputs.actionlint-status }}
+          ZIZMOR_STATUS: ${{ steps.lint.outputs.zizmor-status }}
+        run: |
+          {
+            echo "failed=$LINT_FAILED"
+            echo "actionlint-failed=$(( ACTIONLINT_STATUS != 0 ))"
+            echo "zizmor-failed=$(( ZIZMOR_STATUS != 0 ))"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Report lint problems
+        if: steps.lint.outcome == 'failure'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs')
+            for (const [tool, path] of [
+              ['actionlint', '/tmp/actionlint.txt'],
+              ['zizmor', '/tmp/zizmor.txt'],
+            ]) {
+              let output = 'No output was captured.'
+              try {
+                output = fs.readFileSync(path, 'utf8')
+              } catch {}
+              core.info(`${tool} output:\n${output}`)
+            }
+            core.setFailed('actionlint or zizmor found problems.')
+
+  report:
+    if: always() && needs.lint.result != 'cancelled'
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Update lint issue
+        if: github.event_name == 'push'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          LINT_FAILED: ${{ needs.lint.outputs.failed }}
+          ACTIONLINT_FAILED: ${{ needs.lint.outputs.actionlint-failed }}
+          ZIZMOR_FAILED: ${{ needs.lint.outputs.zizmor-failed }}
+        with:
+          script: |
+            const title = 'GitHub Actions lint failures on main'
+            const { owner, repo } = context.repo
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: 'open',
+              per_page: 100,
+            })
+
+            for (const issue of issues.filter((candidate) =>
+              !candidate.pull_request && candidate.title === title
+            )) {
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: issue.number,
+                state: 'closed',
+                state_reason: 'not_planned',
+              })
+            }
+
+            if (process.env.LINT_FAILED !== 'true') {
+              return
+            }
+
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`
+            const failedTools = [
+              process.env.ACTIONLINT_FAILED === '1' && 'actionlint',
+              process.env.ZIZMOR_FAILED === '1' && 'zizmor',
+            ].filter(Boolean)
+            const body = [
+              'actionlint or zizmor found problems in GitHub Actions files on `main`.',
+              '',
+              `Failed scanners: ${failedTools.join(', ') || 'unknown'}`,
+              '',
+              `Workflow run: ${runUrl}`,
+              '',
+              'Generated `.lock.yml` files were excluded.',
+            ].join('\n')
+
+            await github.rest.issues.create({ owner, repo, title, body })
+
+      - name: Update pull request comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          LINT_FAILED: ${{ needs.lint.outputs.failed }}
+          ACTIONLINT_FAILED: ${{ needs.lint.outputs.actionlint-failed }}
+          ZIZMOR_FAILED: ${{ needs.lint.outputs.zizmor-failed }}
+        with:
+          script: |
+            const marker = '<!-- github-actions-lint -->'
+            const { owner, repo } = context.repo
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            })
+            const existing = comments.find((comment) =>
+              comment.user?.type === 'Bot' && comment.body?.includes(marker)
+            )
+
+            if (process.env.LINT_FAILED !== 'true') {
+              if (existing) {
+                await github.rest.issues.deleteComment({
+                  owner,
+                  repo,
+                  comment_id: existing.id,
+                })
+              }
+              return
+            }
+
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`
+            const failedTools = [
+              process.env.ACTIONLINT_FAILED === '1' && 'actionlint',
+              process.env.ZIZMOR_FAILED === '1' && 'zizmor',
+            ].filter(Boolean)
+            const body = [
+              marker,
+              '## GitHub Actions lint failures',
+              '',
+              `Failed scanners: ${failedTools.join(', ') || 'unknown'}`,
+              '',
+              `Workflow run: ${runUrl}`,
+              '',
+              'Generated `.lock.yml` files were excluded.',
+            ].join('\n')
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              })
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: context.issue.number,
+                body,
+              })
+            }
