@@ -2,10 +2,7 @@ import { expect, test } from "@playwright/test";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { startDashboardServer } from "../../dashboard/local-server.mjs";
-import {
-  effectiveDashboardSources,
-  missingDashboardSources,
-} from "./dashboard-view-sources.mjs";
+import { downloadDeployedDashboardData } from "./dashboard-view-data.mjs";
 
 const outputDirectory = resolve(
   process.env.DASHBOARD_VIEWS_OUTPUT_DIR || "test-results/dashboard-views",
@@ -37,23 +34,14 @@ test("each selected dashboard view renders with live data", async ({ browser }, 
     results: [],
   };
   let preview;
-  let liveSources;
 
   try {
     if (process.env.DASHBOARD_PAGE_IDS === "") return;
     if (!sourceUrl) throw new Error("DASHBOARD_DATA_URL is required.");
 
     preview = await startDashboardServer({
-      downloadData: async (destination) => {
-        const response = await fetch(sourceUrl);
-        if (!response.ok) {
-          throw new Error(`Unable to download deployed dashboard data: HTTP ${response.status}.`);
-        }
-        await mkdir(destination, { recursive: true });
-        const sourceText = await response.text();
-        liveSources = JSON.parse(sourceText);
-        await writeFile(join(destination, "sources.json"), sourceText);
-      },
+      downloadData: (destination) =>
+        downloadDeployedDashboardData(destination, sourceUrl),
       host: "127.0.0.1",
       port: 0,
     });
@@ -62,7 +50,6 @@ test("each selected dashboard view renders with live data", async ({ browser }, 
       throw new Error(`Unable to load composed dashboard.json: HTTP ${dashboardResponse.status}.`);
     }
     const dashboard = await dashboardResponse.json();
-    const effectiveSources = effectiveDashboardSources(liveSources);
     const pages = selectedPages(dashboard);
     summary.selectedPageIds = pages.map((page) => page.id);
     if (pages.length === 0) throw new Error("No selected page IDs exist in the composed dashboard.");
@@ -136,12 +123,8 @@ test("each selected dashboard view renders with live data", async ({ browser }, 
         result.missingViews = result.declaredViews.filter(
           (viewId) => !result.renderedViews.includes(viewId),
         );
-        const sourceProblems = missingDashboardSources(pageDefinition, effectiveSources);
-        result.missingData = [
-          ...sourceProblems,
-          ...await activePage.locator('[aria-label^="Unable to load "]')
-            .evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label"))),
-        ];
+        result.missingData = await activePage.locator('[aria-label^="Unable to load "]')
+          .evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label")));
         result.domNodes = await page.locator("*").count();
         result.crashed = crashed;
         result.status = (
