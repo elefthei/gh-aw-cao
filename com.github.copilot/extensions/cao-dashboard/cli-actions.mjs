@@ -11,6 +11,48 @@ const ghAwInstallerUrl =
   "https://raw.githubusercontent.com/github/gh-aw/main/install-gh-aw.sh";
 const ghAwVersionPattern = /^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/;
 const caoConfigurationPath = join(".github", "workflows", "cao.json");
+const repositoryPattern = /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9._-]+$/;
+const workflowInputPattern = /^[A-Za-z_][A-Za-z0-9_-]*=.*$/s;
+
+function validWorkflowDispatchArguments(args) {
+  if (!args[0] || args[0].startsWith("-")) return false;
+  for (let index = 1; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === "--repo" || argument === "-R") {
+      if (!repositoryPattern.test(args[index + 1] ?? "")) return false;
+      index += 1;
+    } else if (argument.startsWith("--repo=")) {
+      if (!repositoryPattern.test(argument.slice("--repo=".length))) return false;
+    } else if (argument === "--ref") {
+      if (!args[index + 1] || args[index + 1].startsWith("-")) return false;
+      index += 1;
+    } else if (argument.startsWith("--ref=")) {
+      if (argument.length === "--ref=".length) return false;
+    } else if (argument === "--raw-field" || argument === "-f") {
+      if (!workflowInputPattern.test(args[index + 1] ?? "")) return false;
+      index += 1;
+    } else if (argument.startsWith("--raw-field=")) {
+      if (!workflowInputPattern.test(argument.slice("--raw-field=".length))) return false;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+const allowedCommandPrefixes = [
+  {
+    tokens: ["gh", "aw"],
+    minimumArguments: 1,
+    usage: "gh aw <command>",
+  },
+  {
+    tokens: ["gh", "workflow", "run"],
+    minimumArguments: 1,
+    validateArguments: validWorkflowDispatchArguments,
+    usage: "gh workflow run <workflow>",
+  },
+];
 
 export async function resolveGhAwCompilerVersion(workingDirectory = process.cwd()) {
   let configuration;
@@ -26,7 +68,7 @@ export async function resolveGhAwCompilerVersion(workingDirectory = process.cwd(
   return version;
 }
 
-export function parseGhAwCommand(command) {
+export function parseDashboardCommand(command) {
   if (typeof command !== "string" || command.length === 0) {
     throw new Error("CLI action command must be a non-empty string.");
   }
@@ -75,15 +117,37 @@ export function parseGhAwCommand(command) {
   }
   if (escaping || quote) throw new Error("CLI action command contains an incomplete escape or quote.");
   if (tokenStarted) tokens.push(token);
-  if (tokens[0] !== "gh" || tokens[1] !== "aw" || tokens.length < 3) {
-    throw new Error('CLI action command must be an explicit "gh aw <command>" invocation.');
+  const isAllowed = allowedCommandPrefixes.some((allowed) => {
+    const commandArguments = tokens.slice(allowed.tokens.length);
+    return allowed.tokens.every((token, index) => tokens[index] === token)
+      && commandArguments.length >= allowed.minimumArguments
+      && (!allowed.validateArguments || allowed.validateArguments(commandArguments));
+  });
+  if (!isAllowed) {
+    const allowedCommandUsage = allowedCommandPrefixes
+      .map(({ usage }) => `"${usage}"`)
+      .join(" or ");
+    throw new Error(
+      `CLI action command must be an explicit ${allowedCommandUsage} invocation.`,
+    );
   }
   return tokens;
 }
 
+const gitIdentityEnvironmentKeys = [
+  "GIT_AUTHOR_NAME",
+  "GIT_AUTHOR_EMAIL",
+  "GIT_COMMITTER_NAME",
+  "GIT_COMMITTER_EMAIL",
+];
+
 function commandEnvironment(githubToken, gitIdentity) {
+  const environment = { ...process.env };
+  if (!gitIdentity) {
+    for (const key of gitIdentityEnvironmentKeys) delete environment[key];
+  }
   return {
-    ...process.env,
+    ...environment,
     ...(githubToken ? { GH_TOKEN: githubToken } : {}),
     ...(gitIdentity ? {
       GIT_AUTHOR_NAME: gitIdentity.name,
@@ -213,32 +277,36 @@ async function resolveGitIdentity({
   };
 }
 
-export async function executeGhAwCommand({
+export async function executeDashboardCommand({
   command,
   workingDirectory,
   githubToken,
   ghExecutable = "gh",
   execute = executeFile,
   onOutput,
-  streamCommand = runGhAwCommandStreaming,
+  streamCommand = runDashboardCommandStreaming,
 }) {
-  const tokens = parseGhAwCommand(command);
+  const tokens = parseDashboardCommand(command);
   const resolvedGithubToken = await resolveGithubToken({
     githubToken,
     ghExecutable,
     execute,
   });
-  await ensureGhAwAvailable({
-    githubToken: resolvedGithubToken,
-    workingDirectory,
-    ghExecutable,
-    execute,
-  });
-  const gitIdentity = await resolveGitIdentity({
-    githubToken: resolvedGithubToken,
-    ghExecutable,
-    execute,
-  });
+  const isGhAwCommand = tokens[1] === "aw";
+  let gitIdentity;
+  if (isGhAwCommand) {
+    await ensureGhAwAvailable({
+      githubToken: resolvedGithubToken,
+      workingDirectory,
+      ghExecutable,
+      execute,
+    });
+    gitIdentity = await resolveGitIdentity({
+      githubToken: resolvedGithubToken,
+      ghExecutable,
+      execute,
+    });
+  }
   if (typeof onOutput === "function") {
     return streamCommand({
       ghExecutable,
@@ -279,7 +347,7 @@ export async function executeGhAwCommand({
   }
 }
 
-export function runGhAwCommandStreaming({
+export function runDashboardCommandStreaming({
   ghExecutable,
   args,
   workingDirectory,
