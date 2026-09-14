@@ -14,9 +14,25 @@ Central Agentic Ops packages reusable orchestrators and focused workers so platf
 - **Roll out with confidence:** review proposed outcomes away from the target, then promote each package independently to `live`.
 - **Keep work accountable:** every worker stays scoped to one repository and links its outcome to the originating control-plane run.
 
+## Project status and scope
+
+Central Agentic Ops is an actively developed research prototype. It extends
+[GitHub Agentic Workflows](https://github.github.com/gh-aw/) with a catalog of
+reusable operations and a central control plane for explicit repository fleets.
+It does not replace repository permissions, branch protections, or human review.
+
+See the [open issues](https://github.com/githubnext/gh-aw-cao/issues) for current
+work and planned improvements.
+
 ## Documentation
 
 Ready to explore? [See the docs](https://githubnext.github.io/gh-aw-cao/).
+
+## Requirements
+
+Using the catalog requires a GitHub repository and GitHub Agentic Workflows.
+Contributing locally requires Node.js 24, npm, and the `gh-aw` compiler. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for setup and validation instructions.
 
 ## Agent plugin
 
@@ -35,3 +51,24 @@ The default Central Agentic Ops package installs the dashboard builder and manua
 3. Restrict Pages access to the intended audience before publishing control-plane data.
 
 The dashboard workflow remains manual and does not enable Pages automatically.
+
+## Contributing
+
+Contributions and issue reports are welcome. Read
+[CONTRIBUTING.md](CONTRIBUTING.md) and our
+[Code of Conduct](CODE_OF_CONDUCT.md) before participating.
+
+## Maintainers
+
+Central Agentic Ops is maintained by [GitHub Next](https://github.com/githubnext).
+Ownership rules are recorded in [.github/CODEOWNERS](.github/CODEOWNERS).
+
+## Support
+
+See [SUPPORT.md](SUPPORT.md) for help and support expectations. Report suspected
+security vulnerabilities privately by following [SECURITY.md](SECURITY.md).
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for the
+full terms.
