@@ -28,13 +28,7 @@ work and planned improvements.
 
 Ready to explore? [See the docs](https://githubnext.github.io/gh-aw-cao/).
 
-## Requirements
-
-Using the catalog requires a GitHub repository and GitHub Agentic Workflows.
-Contributing locally requires Node.js 24, npm, and the `gh-aw` compiler. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for setup and validation instructions.
-
-## Agent plugin
+## Agent plugin and Requirements
 
 This repository is an [Agent Plugins 1.0](https://agent-plugins.org/) plugin. It exposes the portable `create-ops-package` and `analyze-agentic-ops` skills.
 
