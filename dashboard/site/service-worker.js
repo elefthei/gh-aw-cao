@@ -1,4 +1,4 @@
-const VERSION = '1';
+const VERSION = '2';
 const DATA_CACHE = `central-agentic-ops-dashboard-data-${VERSION}`;
 const APP_CACHE = `central-agentic-ops-dashboard-app-${VERSION}`;
 const CONFIG_CACHE = 'central-agentic-ops-dashboard-config';
@@ -6,7 +6,7 @@ const CONFIG_URL = new URL('./.dashboard-data-update-config', self.registration.
 const PERIODIC_SYNC_TAG = 'central-agentic-ops-dashboard-data';
 const UPDATE_INTERVAL_MS = 60 * 60 * 1000;
 const DOWNLOAD_TIMEOUT_MS = 2 * 60 * 1000;
-const DATA_FILES = new Set(['gh-aw-logs.jsonl', 'inventory-sources.json']);
+const DATA_FILES = new Set(['payload-hashes.json', 'gh-aw-logs.jsonl', 'inventory-sources.json']);
 
 function isDashboardDataUrl(value) {
   try {
@@ -36,24 +36,62 @@ async function downloadData(urls) {
   if (!requested.some((url) => new URL(url).pathname.endsWith('/gh-aw-logs.jsonl'))) {
     throw new Error('Dashboard data URL is missing.');
   }
-  const responses = await Promise.all(requested.map(async (url) => {
-    const response = await fetch(url, {
+  const cache = await caches.open(DATA_CACHE);
+  const hashesUrl = requested.find((url) => new URL(url).pathname.endsWith('/payload-hashes.json'));
+  let hashesResponse;
+  let publishedJsonlHash = null;
+  let unchangedJsonl = false;
+  if (hashesUrl) {
+    const previous = await cache.match(hashesUrl);
+    const response = await fetch(hashesUrl, {
       cache: 'no-store',
       credentials: 'same-origin',
       signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS)
     });
+    if (response.ok) {
+      const [previousHashes, currentHashes] = await Promise.all([
+        previous?.json().catch(() => null) ?? null,
+        response.clone().json().catch(() => null)
+      ]);
+      const jsonlHash = (hashes) => {
+        const hash = hashes && typeof hashes === 'object' ? hashes['gh-aw-logs.jsonl'] : null;
+        return typeof hash === 'string' && /^[a-f0-9]{64}$/i.test(hash) ? hash.toLowerCase() : null;
+      };
+      publishedJsonlHash = jsonlHash(currentHashes);
+      unchangedJsonl = Boolean(publishedJsonlHash && publishedJsonlHash === jsonlHash(previousHashes));
+      if (publishedJsonlHash) hashesResponse = response;
+    } else if (response.status !== 404) {
+      throw new Error(`Dashboard data download returned ${response.status}.`);
+    }
+  }
+  if (hashesUrl && !publishedJsonlHash) await cache.delete(hashesUrl);
+  const responses = await Promise.all(requested
+    .filter((url) => url !== hashesUrl)
+    .filter((url) => !(unchangedJsonl && new URL(url).pathname.endsWith('/gh-aw-logs.jsonl')))
+    .map(async (url) => {
+    const previous = await cache.match(url);
+    const jsonl = new URL(url).pathname.endsWith('/gh-aw-logs.jsonl');
+    const etag = !publishedJsonlHash && jsonl ? previous?.headers.get('etag') : null;
+    const response = await fetch(url, {
+      cache: 'no-store',
+      credentials: 'same-origin',
+      headers: etag ? { 'If-None-Match': etag } : undefined,
+      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS)
+    });
     const optionalInventory = new URL(url).pathname.endsWith('/inventory-sources.json');
-    if (!response.ok && !(optionalInventory && response.status === 404)) {
+    if (!response.ok && response.status !== 304 && !(optionalInventory && response.status === 404)) {
       throw new Error(`Dashboard data download returned ${response.status}.`);
     }
     return { url, response, optionalInventory };
   }));
-  const cache = await caches.open(DATA_CACHE);
   await Promise.all(responses.map(({ url, response, optionalInventory }) => (
     optionalInventory && response.status === 404
       ? cache.delete(url)
-      : cache.put(url, response.clone())
+      : response.status === 304
+        ? undefined
+        : cache.put(url, response.clone())
   )));
+  if (hashesUrl && hashesResponse) await cache.put(hashesUrl, hashesResponse.clone());
 }
 
 async function storeDataUrls(urls) {
@@ -139,6 +177,7 @@ self.addEventListener('fetch', (event) => {
   if (!isDashboardDataUrl(event.request.url)) {
     if (!isAppAssetUrl(event.request.url)) return;
     event.respondWith((async () => {
+      if (event.request.cache === 'no-store') return fetch(event.request);
       try {
         const response = await fetch(event.request);
         if (response.ok) {
@@ -159,6 +198,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   event.respondWith((async () => {
+    if (event.request.cache === 'no-store') return fetch(event.request);
     try {
       const response = await fetch(event.request);
       if (response.ok) {

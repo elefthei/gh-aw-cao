@@ -143,12 +143,18 @@ describe('canonical dashboard worker retention updates', () => {
 
     /** @type {(RequestInit | undefined)[]} */
     const jsonlRequests = [];
+    /** @type {string[]} */
+    const requestUrls = [];
+    const payloadHashes = {
+      'gh-aw-logs.jsonl': 'a'.repeat(64),
+      'gh-aw-logs.sqlite': 'b'.repeat(64)
+    };
     globalThis.fetch = /** @type {typeof fetch} */ (async (input, init) => {
+      requestUrls.push(String(input));
+      if (String(input).endsWith('/payload-hashes.json')) return Response.json(payloadHashes);
       if (String(input).endsWith('/inventory-sources.json')) return new Response(null, { status: 404 });
       jsonlRequests.push(init);
-      return new Headers(init?.headers).get('If-None-Match') === '"generation-b"'
-        ? new Response(null, { status: 304 })
-        : new Response('', { headers: { etag: '"generation-b"' } });
+      return new Response('', { headers: { etag: '"generation-b"' } });
     });
     dispatch({
       id: 3,
@@ -171,10 +177,64 @@ describe('canonical dashboard worker retention updates', () => {
 
     expect(firstJsonl?.data).toMatchObject({ changed: true });
     expect(repeatedJsonl?.data).toMatchObject({ changed: false });
-    expect(new Headers(jsonlRequests[1]?.headers).get('If-None-Match')).toBe('"generation-b"');
+    expect(jsonlRequests).toHaveLength(1);
+    expect(requestUrls).toEqual([
+      'https://dashboard.example/payload-hashes.json',
+      'https://dashboard.example/inventory-sources.json',
+      'https://dashboard.example/gh-aw-logs.jsonl',
+      'https://dashboard.example/payload-hashes.json',
+      'https://dashboard.example/inventory-sources.json'
+    ]);
 
+    const updatedPayloadHashes = { ...payloadHashes, 'gh-aw-logs.jsonl': 'c'.repeat(64) };
+    globalThis.fetch = /** @type {typeof fetch} */ (async (input, init) => {
+      if (String(input).endsWith('/payload-hashes.json')) return Response.json(updatedPayloadHashes);
+      if (String(input).endsWith('/inventory-sources.json')) return new Response(null, { status: 404 });
+      jsonlRequests.push(init);
+      return new Response('', { headers: { etag: '"generation-c"' } });
+    });
     dispatch({
       id: 5,
+      operation: 'load-canonical-dashboard',
+      sourceUrl: 'https://dashboard.example/gh-aw-logs.jsonl',
+      sourceNames: ['event-inspection'],
+      context,
+      reportActivation: true
+    });
+    expect((await settled((message) => message.id === 5))?.data).toMatchObject({ changed: true });
+    expect(new Headers(jsonlRequests[1]?.headers).get('If-None-Match')).toBeNull();
+    dispatch({
+      id: 6,
+      operation: 'load-canonical-dashboard',
+      sourceUrl: 'https://dashboard.example/gh-aw-logs.jsonl',
+      sourceNames: ['event-inspection'],
+      context,
+      reportActivation: true
+    });
+    expect((await settled((message) => message.id === 6))?.data).toMatchObject({ changed: false });
+    expect(jsonlRequests).toHaveLength(2);
+
+    globalThis.fetch = /** @type {typeof fetch} */ (async (input, init) => {
+      if (String(input).endsWith('/payload-hashes.json')) return new Response(null, { status: 404 });
+      if (String(input).endsWith('/inventory-sources.json')) return new Response(null, { status: 404 });
+      jsonlRequests.push(init);
+      return new Headers(init?.headers).get('If-None-Match') === '"generation-c"'
+        ? new Response(null, { status: 304 })
+        : new Response('');
+    });
+    dispatch({
+      id: 7,
+      operation: 'load-canonical-dashboard',
+      sourceUrl: 'https://dashboard.example/gh-aw-logs.jsonl',
+      sourceNames: ['event-inspection'],
+      context,
+      reportActivation: true
+    });
+    expect((await settled((message) => message.id === 7))?.data).toMatchObject({ changed: false });
+    expect(new Headers(jsonlRequests[2]?.headers).get('If-None-Match')).toBe('"generation-c"');
+
+    dispatch({
+      id: 8,
       operation: 'execute-dashboard-queries',
       queries: context.queries,
       sources: {
@@ -189,7 +249,7 @@ describe('canonical dashboard worker retention updates', () => {
       }
     });
 
-    expect(await settled((message) => message.id === 5)).toMatchObject({
+    expect(await settled((message) => message.id === 8)).toMatchObject({
       cancelled: false,
       error: 'source read failed'
     });

@@ -6,6 +6,7 @@ import { adaptDashboardSources } from './data/adapters/dashboard-sources.js';
 import {
   ingestCachedGhAwJsonl,
   ingestDashboardSources,
+  isCachedGhAwJsonlCurrent,
   readCurrentIngestion
 } from './data/ingest/coordinator.js';
 import { normalize } from './data/normalize/index.js';
@@ -242,6 +243,7 @@ function dashboardContext(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new TypeError('Canonical dashboard queries require a dashboard context.');
   }
+
   const context = /** @type {{ githubUrlBase?: unknown, pages?: unknown, queries?: unknown }} */ (value);
   if (!Array.isArray(context.pages)) {
     throw new TypeError('Canonical dashboard context requires pages.');
@@ -255,6 +257,16 @@ function dashboardContext(value) {
     pages: /** @type {import('./inferred-sources.js').DashboardPage[]} */ (context.pages),
     queries: /** @type {unknown[]} */ (context.queries ?? [])
   };
+}
+
+/** @param {unknown} hashes @param {string} fileName */
+function publishedPayloadIdentity(hashes, fileName) {
+  const hash = hashes && typeof hashes === 'object' && !Array.isArray(hashes)
+    ? /** @type {Record<string, unknown>} */ (hashes)[fileName]
+    : null;
+  return typeof hash === 'string' && /^[a-f0-9]{64}$/i.test(hash)
+    ? `sha256:${hash.toLowerCase()}`
+    : null;
 }
 
 /**
@@ -296,6 +308,14 @@ export function processDataRequest(request, signal) {
       try {
         let sources = jsonl ? {} : await loadDashboardSources(fetch, sourceUrl.href);
         if (jsonl) {
+          const payloadHashesUrl = new URL('./payload-hashes.json', sourceUrl);
+          const payloadHashesResponse = await fetch(payloadHashesUrl, { cache: 'no-store' }).catch(() => null);
+          const publishedIdentity = payloadHashesResponse?.ok
+            ? publishedPayloadIdentity(
+                await payloadHashesResponse.json().catch(() => null),
+                sourceUrl.pathname.split('/').at(-1) ?? ''
+              )
+            : null;
           const inventoryUrl = new URL('./inventory-sources.json', sourceUrl);
           const inventoryResponse = await fetch(inventoryUrl);
           if (inventoryResponse.ok) {
@@ -334,26 +354,43 @@ export function processDataRequest(request, signal) {
             && typeof current.payloadEtag === 'string'
             ? current.payloadEtag
             : null;
-          const response = await fetch(sourceUrl.href, currentEtag
-            ? { headers: { 'If-None-Match': currentEtag } }
-            : undefined);
-          if (response.status === 304) {
+          const currentPublishedPayload = publishedIdentity
+            ? await isCachedGhAwJsonlCurrent(indexedDB, {
+                payloadIdentity: publishedIdentity,
+                payloadScope: sourceUrl.href,
+                context: collectionContext,
+                workflowHints
+              })
+            : false;
+          if (currentPublishedPayload) {
             changed = false;
           } else {
-            if (!response.ok) throw new Error(`Unable to load gh-aw JSONL: ${response.status}`);
-            if (!response.body) throw new Error('Unable to stream gh-aw JSONL response body');
-            const etag = response.headers.get('etag');
-            const ingestion = await ingestCachedGhAwJsonl(indexedDB, responseChunks(response.body), {
-              storage: globalThis.navigator?.storage,
-              retentionWindowMsByStore: BROWSER_RETENTION_WINDOWS_MS,
-              workflowHints,
-              onProgress: ({ linesProcessed }) => progress.update(linesProcessed),
-              payloadIdentity: etag ? `${sourceUrl.href}:${etag}` : undefined,
-              payloadEtag: etag ?? undefined,
-              payloadScope: sourceUrl.href,
-              context: collectionContext
-            });
-            changed ||= ingestion.updated;
+            const response = await fetch(
+              sourceUrl.href,
+              publishedIdentity
+                ? { cache: 'no-store' }
+                : currentEtag
+                  ? { headers: { 'If-None-Match': currentEtag } }
+                  : undefined
+            );
+            if (response.status === 304) {
+              changed = false;
+            } else {
+              if (!response.ok) throw new Error(`Unable to load gh-aw JSONL: ${response.status}`);
+              if (!response.body) throw new Error('Unable to stream gh-aw JSONL response body');
+              const etag = response.headers.get('etag');
+              const ingestion = await ingestCachedGhAwJsonl(indexedDB, responseChunks(response.body), {
+                storage: globalThis.navigator?.storage,
+                retentionWindowMsByStore: BROWSER_RETENTION_WINDOWS_MS,
+                workflowHints,
+                onProgress: ({ linesProcessed }) => progress.update(linesProcessed),
+                payloadIdentity: publishedIdentity ?? (etag ? `${sourceUrl.href}:${etag}` : undefined),
+                payloadEtag: etag ?? undefined,
+                payloadScope: sourceUrl.href,
+                context: collectionContext
+              });
+              changed ||= ingestion.updated;
+            }
           }
           if (inventoryResponse.ok) {
             const inventoryIngestion = await ingestDashboardSources(indexedDB, sources, {
