@@ -12,7 +12,7 @@ import { enableDetailsMenuDismissal, formatMediumUtcDateTime, renderEmptyMessage
 import { customViewAvailabilityMessage, renderCustomViewStateDetails, renderLayoutSectionChrome, renderPageSection, renderViewDisclosure } from './components/view-chrome.js';
 import { formatString, toNumber, stringOrFallback } from './view-formatters.js';
 import { findLink } from './components/link-content.js';
-import { elementHandlesEmptyRows, renderUiElement, renderUiElementAsync } from './components/ui-elements.js';
+import { elementHandlesEmptyRows, elementLoadsSourcesAsync, renderUiElement, renderUiElementAsync } from './components/ui-elements.js';
 import { renderDataView, supportsIncrementalChartContinuation } from './components/data-view.js';
 import { enableHorizonOutsideClickDismissal, renderFilterBar, setTimeWindowFilter, setTimeWindowRange } from './components/filter-bar.js';
 import { renderSiteCallouts } from './components/site-callout.js';
@@ -141,6 +141,16 @@ function getBuiltInPagePayload(page) {
 }
 
 /**
+ * @param {unknown} view
+ * @returns {boolean}
+ */
+function isAsyncElementView(view) {
+  return isPlainObject(view)
+    && typeof view.element === 'string'
+    && elementLoadsSourcesAsync(view.element);
+}
+
+/**
  * @param {PresentationDocument} document
  * @param {string} pageId
  * @returns {string[]}
@@ -151,6 +161,7 @@ export function dashboardPageSourceNames(document, pageId) {
   const payload = page.kind === 'built-in' ? getBuiltInPagePayload(page) : page;
   const names = new Set();
   for (const view of payload.views ?? []) {
+    if (isAsyncElementView(view)) continue;
     for (const sourceName of getViewSources(view)) names.add(sourceName);
   }
 
@@ -2240,6 +2251,7 @@ function renderElementView(pageId, title, view, sources, contextDetails, heading
     titleLink: isPlainObject(view['title-link']) ? view['title-link'] : undefined,
     routeParameter,
     viewId: typeof view.id === 'string' ? view.id : undefined,
+    filterRows: (/** @type {Array<Record<string, unknown>>} */ rows) => filterRowsForView(rows, viewData),
     elementConfig: isPlainObject(view.config) ? view.config : undefined,
     headingTag
   });
@@ -2303,6 +2315,7 @@ async function renderElementViewAsync(pageId, title, view, sources, contextDetai
     titleLink: isPlainObject(view['title-link']) ? view['title-link'] : undefined,
     routeParameter,
     viewId: typeof view.id === 'string' ? view.id : undefined,
+    filterRows: (/** @type {Array<Record<string, unknown>>} */ rows) => filterRowsForView(rows, viewData),
     elementConfig: isPlainObject(view.config) ? view.config : undefined,
     headingTag
   });
@@ -2318,6 +2331,7 @@ async function renderElementViewAsync(pageId, title, view, sources, contextDetai
     titleLink: isPlainObject(view['title-link']) ? view['title-link'] : undefined,
     routeParameter,
     viewId: typeof view.id === 'string' ? view.id : undefined,
+    filterRows: (/** @type {Array<Record<string, unknown>>} */ rows) => filterRowsForView(rows, viewData),
     elementConfig: isPlainObject(view.config) ? view.config : undefined,
     headingTag
   });
