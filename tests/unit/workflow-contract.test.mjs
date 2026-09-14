@@ -23,6 +23,25 @@ function script(name, directory) {
   return readFileSync(join(directory, name), "utf8").replace(/\r?\n$/, "");
 }
 
+test("Copilot branch cleaner batches discovery and starts in dry-run mode", () => {
+  const source = workflow("copilot-branch-cleaner.yml");
+
+  assert.match(source, /cron: "23 \* \* \* \*"/);
+  assert.match(source, /COPILOT_BRANCH_CLEANER_DRY_RUN != 'false'/);
+  assert.match(source, /refPrefix = 'refs\/heads\/copilot\/'/);
+  assert.match(source, /terminal: associatedPullRequests\([\s\S]*?states: \[MERGED, CLOSED\]/);
+  assert.match(source, /open: associatedPullRequests\(first: 1, states: \[OPEN\]\)/);
+  assert.match(source, /ref\.open\.totalCount === 0 && ref\.terminal\.totalCount > 0/);
+  assert.match(source, /mutation DeleteCopilotBranches/);
+  assert.match(source, /updateRefs\(input: \$input\)/);
+  assert.match(source, /beforeOid: oid/);
+  assert.match(source, /afterOid: zeroOid/);
+  assert.match(source, /catch \{[\s\S]*?failed\.push\(\.\.\.batch\)/);
+  assert.match(source, /addHeading\('Branches not deleted'\)/);
+  assert.doesNotMatch(source, /deleteRef/);
+  assert.doesNotMatch(source, /github\.rest|gh api/);
+});
+
 test("Actions lint failures create new pull request comments without comment lookup", () => {
   const source = workflow("action-lint.yml");
   const pullRequestReporter = source.slice(source.indexOf("- name: Create pull request comment"));
