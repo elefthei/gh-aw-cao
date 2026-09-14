@@ -182,8 +182,16 @@ store: `key_findings` to `audit.finding`, `observability_insights` to
 `audit.missing_data`, `noops` to `audit.noop`, `mcp_failures` to
 `audit.mcp_failure`, and `skill_activations` to `audit.skill_activation`.
 
-Each `safe_outputs[]` item, or `audit.created_items[]` when `safe_outputs` is
-absent, SHALL emit `safe_output.created` with source `safe-output`.
+Each `safe_output_item` envelope SHALL emit `safe_output.created` with source
+`safe-output` in the agentic Session for its preceding `run` envelope with the
+same `run_id`. When no item envelopes are present for a Run, `safe_outputs[]`,
+or `audit.created_items[]` when `safe_outputs` is absent, SHALL provide the
+Events instead. This precedence prevents the duplicated projection in the Run
+envelope from creating duplicate Events. The Event SHALL preserve the source
+item's `type` as `safeOutputType` and SHALL preserve or derive
+`githubEntityType` from explicit target kind, canonical github.com URL shape,
+or the safe-output action. Non-GitHub provider items and items without
+conclusive GitHub entity evidence SHALL leave `githubEntityType` absent.
 
 Event records SHALL populate only the existing Event model fields:
 
@@ -198,6 +206,8 @@ status
 correlationId
 payloadRef
 sourceSequence
+safeOutputType
+githubEntityType
 sequence
 observedAt
 provenance
@@ -245,6 +255,8 @@ rawRuns
 agenticRuns
 sessions
 events
+safeOutputItems
+mappedSafeOutputItems
 rateLimits
 mappedRateLimits
 ```
