@@ -70,7 +70,7 @@ let nextIngestionProgressId = 0;
  */
 export function startIngestionProgress(target = self) {
   const id = `ingestion-progress-${++nextIngestionProgressId}`;
-  let message = 'Ingesting data... 0 records processed.';
+  let message = 'Reading source data... 0 records read.';
   const report = () => publishWorkerNotification({ id, message, tone: 'info', duration: 0 }, target);
   /** @type {ReturnType<typeof setInterval> | undefined} */
   let interval;
@@ -79,9 +79,9 @@ export function startIngestionProgress(target = self) {
     interval = setInterval(report, INGESTION_PROGRESS_INTERVAL_MS);
   }, INGESTION_PROGRESS_DELAY_MS);
   return {
-    /** @param {number} recordsProcessed */
-    update(recordsProcessed) {
-      message = `Ingesting data... ${recordsProcessed} ${recordsProcessed === 1 ? 'record' : 'records'} processed.`;
+    /** @param {number} recordsRead */
+    update(recordsRead) {
+      message = `Reading source data... ${recordsRead} ${recordsRead === 1 ? 'record' : 'records'} read.`;
     },
     /**
      * Reports the storage phase, which dominates large ingestions and would
@@ -391,7 +391,7 @@ export function processDataRequest(request, signal) {
                 storage: globalThis.navigator?.storage,
                 retentionWindowMsByStore: BROWSER_RETENTION_WINDOWS_MS,
                 workflowHints,
-                onProgress: ({ linesProcessed }) => progress.update(linesProcessed),
+                onProgress: ({ recordsIngested }) => progress.update(recordsIngested),
                 onWriteProgress: (written) => progress.store(written),
                 payloadIdentity: publishedIdentity ?? (etag ? `${sourceUrl.href}:${etag}` : undefined),
                 payloadEtag: etag ?? undefined,
