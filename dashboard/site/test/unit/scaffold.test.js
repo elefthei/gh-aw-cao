@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -21,6 +21,73 @@ describe('DLS-CONF-004 scaffold gates', () => {
 
     expect(preview).toContain('<link rel="icon" href="./favicon.svg">');
     expect(favicon).toBe(agenticWorkflowsFavicon);
+  });
+
+  it('declares an installable web app manifest and iOS icon', () => {
+    const preview = readFileSync(resolve('index.html'), 'utf8');
+    const manifest = JSON.parse(readFileSync(resolve('manifest.webmanifest'), 'utf8'));
+
+    expect(preview).toContain('<link rel="apple-touch-icon" href="./apple-touch-icon.png">');
+    expect(preview).toContain('<link rel="manifest" href="./manifest.webmanifest">');
+    expect(preview).toContain('<meta name="application-name" content="Central Agentic Ops Dashboard">');
+    expect(preview).toContain('<meta name="theme-color" content="#0d1117">');
+    expect(preview).toContain('<meta name="mobile-web-app-capable" content="yes">');
+    expect(preview).toContain('<meta name="apple-mobile-web-app-capable" content="yes">');
+    expect(preview).toContain('<meta name="apple-mobile-web-app-title" content="Agentic Ops">');
+    expect(preview).toContain('<meta name="apple-mobile-web-app-status-bar-style" content="black">');
+    expect(preview).toContain('content="Monitor and operate GitHub Agentic Workflows from a unified dashboard."');
+    expect(manifest).toMatchObject({
+      id: './',
+      start_url: './',
+      scope: './',
+      display: 'standalone',
+      background_color: '#0d1117',
+      theme_color: '#0d1117'
+    });
+    expect(manifest.icons).toEqual(expect.arrayContaining([
+      expect.objectContaining({ src: './icon-192.png', sizes: '192x192', purpose: 'any' }),
+      expect.objectContaining({ src: './icon-512.png', sizes: '512x512', purpose: 'any' }),
+      expect.objectContaining({ src: './icon-maskable-512.png', sizes: '512x512', purpose: 'maskable' })
+    ]));
+  });
+
+  it('keeps the web app manifest valid and every declared icon usable', () => {
+    const manifest = JSON.parse(readFileSync(resolve('manifest.webmanifest'), 'utf8'));
+    const requiredStrings = [
+      'name', 'short_name', 'description', 'lang', 'id', 'start_url', 'scope',
+      'display', 'background_color', 'theme_color'
+    ];
+
+    for (const property of requiredStrings) {
+      expect(manifest[property], property).toBeTypeOf('string');
+      expect(manifest[property].trim(), property).not.toBe('');
+    }
+    expect(['standalone', 'minimal-ui', 'fullscreen']).toContain(manifest.display);
+    expect(manifest.id).toBe('./');
+    expect(manifest.start_url).toBe('./');
+    expect(manifest.scope).toBe('./');
+    expect(manifest.categories).toEqual(expect.arrayContaining(['business', 'productivity']));
+    expect(manifest.icons.length).toBeGreaterThanOrEqual(2);
+
+    for (const icon of manifest.icons) {
+      expect(icon).toEqual({
+        src: expect.stringMatching(/^\.\/[^/]+\.png$/),
+        sizes: expect.stringMatching(/^\d+x\d+$/),
+        type: 'image/png',
+        purpose: expect.stringMatching(/^(any|maskable)$/)
+      });
+      const iconPath = resolve(icon.src);
+      expect(existsSync(iconPath), icon.src).toBe(true);
+      const contents = readFileSync(iconPath);
+      expect(contents.subarray(1, 4).toString('ascii'), icon.src).toBe('PNG');
+      const [width, height] = icon.sizes.split('x').map(Number);
+      expect(contents.readUInt32BE(16), `${icon.src} width`).toBe(width);
+      expect(contents.readUInt32BE(20), `${icon.src} height`).toBe(height);
+    }
+
+    const appleIcon = readFileSync(resolve('apple-touch-icon.png'));
+    expect(appleIcon.readUInt32BE(16)).toBe(180);
+    expect(appleIcon.readUInt32BE(20)).toBe(180);
   });
 
   it('sets the dashboard title before the presenter loads', () => {
