@@ -52,6 +52,8 @@ jobs:
     name: Authorize and resolve release version
     if: needs.activation.outputs.daily_ai_credits_exceeded != 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       release_tag: ${{ steps.version.outputs.release_tag }}
     steps:
@@ -62,7 +64,7 @@ jobs:
           RELEASE_BUMP: ${{ inputs.bump }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         with:
-          github-token: ${{ secrets.GH_AW_GITHUB_TOKEN || github.token }}
+          github-token: ${{ github.token }}
           script: |
             const requestedBump = process.env.RELEASE_BUMP;
             const triggeringActor = process.env.TRIGGERING_ACTOR;
@@ -149,6 +151,8 @@ jobs:
     name: Validate gh-aw package
     needs: resolve-version
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -162,7 +166,7 @@ jobs:
       - name: Validate files installed from the root aw.yml package
         env:
           CENTRAL_AGENTIC_OPS_PACKAGE_SOURCE: ${{ github.repository }}@${{ github.sha }}
-          GH_TOKEN: ${{ secrets.GH_AW_GITHUB_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: npm run test:package-root
 
   prepare-release:
@@ -180,7 +184,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.resolve-version.outputs.release_tag }}
         with:
-          github-token: ${{ secrets.GH_AW_GITHUB_TOKEN || github.token }}
+          github-token: ${{ github.token }}
           script: |
             const releaseTag = process.env.RELEASE_TAG;
             core.info(`Creating tag and draft release ${releaseTag}.`);
@@ -220,37 +224,43 @@ jobs:
               .addEOL()
               .addLink('Review draft release', release.html_url);
             await core.summary.write();
-      - name: Persist prepared release identity
+      - name: Persist prepared release context
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ steps.release.outputs.release_id }}
           RELEASE_TAG: ${{ needs.resolve-version.outputs.release_tag }}
         run: |
           mkdir -p "$RUNNER_TEMP/release-context"
+          gh api "/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            > "$RUNNER_TEMP/release-context/current_release.json"
           jq -n \
             --argjson id "$RELEASE_ID" \
             --arg tag "$RELEASE_TAG" \
             --arg sha "$GITHUB_SHA" \
             '{id: $id, tag: $tag, sha: $sha}' \
             > "$RUNNER_TEMP/release-context/release.json"
-      - name: Upload prepared release identity
+      - name: Upload prepared release context
         uses: actions/upload-artifact@v7
         with:
           name: release-context-${{ github.run_id }}
-          path: ${{ runner.temp }}/release-context/release.json
+          path: ${{ runner.temp }}/release-context/
           retention-days: 1
 
 steps:
+  - name: Download prepared release context
+    uses: actions/download-artifact@v8
+    with:
+      name: release-context-${{ github.run_id }}
+      path: /tmp/gh-aw/agent/release-data
   - name: Fetch release context
     env:
-      GH_TOKEN: ${{ secrets.GH_AW_GITHUB_TOKEN || github.token }}
-      RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
+      GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ needs.resolve-version.outputs.release_tag }}
     run: |
       set -euo pipefail
       mkdir -p /tmp/gh-aw/agent/release-data
 
-      gh api "/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
-        > /tmp/gh-aw/agent/release-data/current_release.json
+      test -s /tmp/gh-aw/agent/release-data/current_release.json
 
       gh api --paginate --slurp "/repos/$GITHUB_REPOSITORY/releases?per_page=100" \
         --jq '[add[] | select(.draft == false and .prerelease == false)][0] // {}' \
