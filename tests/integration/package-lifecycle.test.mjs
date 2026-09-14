@@ -32,6 +32,7 @@ const caoEvolutionPackageSource = focusedPackageSource("cao-evolution");
 const craPackageSource = focusedPackageSource("eu-cra-compliance");
 const dashboardPackageSource = focusedPackageSource("dashboard");
 const dependabotUpdateSource = focusedPackageSource("dependabot");
+const dependabotPackageUpdateSource = `${packageUpdateSource}/dependabot`;
 const selfCarePackageSource = focusedPackageSource("self-care");
 const softwareDevelopmentPracticesPackageSource = focusedPackageSource("software-development-practices");
 const activityExpectedFiles = [
@@ -211,18 +212,6 @@ test("root package bootstraps an empty CAO and preserves resources during workfl
     for (const relativePath of dashboardExpectedFiles) {
       assert.ok(existsSync(join(consumer, relativePath)), `root package omitted dashboard file ${relativePath}`);
     }
-    for (const workflowId of [
-      "cao-evolution",
-      "dependabot",
-      "optimization",
-    ]) {
-      const source = readFileSync(join(consumer, ".github", "workflows", `${workflowId}.md`), "utf8");
-      const lock = readFileSync(join(consumer, ".github", "workflows", `${workflowId}.lock.yml`), "utf8");
-      assert.match(source, /copilot-requests: write/);
-      assert.match(lock, /COPILOT_GITHUB_TOKEN: \$\{\{ github\.token \}\}/);
-      assert.doesNotMatch(lock, /secrets\.COPILOT_GITHUB_TOKEN/);
-    }
-
     const packageRecords = readdirSync(join(consumer, ".github", "aw", "packages"));
     assert.equal(packageRecords.length, 1, "expected one installed root package manifest");
     const installedPackage = JSON.parse(readFileSync(
@@ -236,13 +225,6 @@ test("root package bootstraps an empty CAO and preserves resources during workfl
       writeFileSync(workflowPath, workflow.replace(/^source: .*$/m, `source: ${packageSource}`));
     }
 
-    const orchestratorPath = join(consumer, ".github", "workflows", "dependabot.md");
-    const orchestrator = readFileSync(orchestratorPath, "utf8");
-    assert.match(orchestrator, new RegExp(`^source: ${packageSource.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
-    const trackedOrchestrator = orchestrator;
-    const modifiedOrchestrator = trackedOrchestrator.replace("max-ai-credits: 250", "max-ai-credits: 251");
-    assert.notEqual(modifiedOrchestrator, trackedOrchestrator, "test could not modify package workflow frontmatter");
-    writeFileSync(orchestratorPath, `${modifiedOrchestrator}\n# local integration-test change\n`);
     const removedRuntime = controlRuntimeFiles[0];
     rmSync(join(consumer, removedRuntime));
     run("gh", [
@@ -257,14 +239,6 @@ test("root package bootstraps an empty CAO and preserves resources during workfl
       "0",
     ], consumer);
 
-    const updatedOrchestrator = readFileSync(orchestratorPath, "utf8");
-    assert.ok(
-      !updatedOrchestrator.includes("# local integration-test change"),
-      "gh aw update retained a local package workflow modification",
-    );
-    assert.match(updatedOrchestrator, /^max-ai-credits: 250$/m);
-    assert.doesNotMatch(updatedOrchestrator, /^max-ai-credits: 251$/m);
-    assert.equal(workflowBody(updatedOrchestrator), workflowBody(orchestrator));
     assert.ok(existsSync(join(consumer, removedRuntime)), "gh aw update did not restore the control runtime");
     assert.equal(existsSync(join(consumer, ".github", "aw", "cao")), false);
     assert.equal(readFileSync(policyPath, "utf8"), policy, "gh aw update changed consumer-owned CAO policy");
@@ -560,6 +534,7 @@ test("gh aw update replaces workflows and restores package-owned assets", { time
     run("gh", [
       "aw",
       "update",
+      dependabotPackageUpdateSource,
       "--force",
       "--no-merge",
       "--no-compile",

@@ -778,14 +778,15 @@ describe('dashboard document validation', () => {
 
     expect(page.views).toEqual([expect.objectContaining({
       id: 'overview-outcomes',
+      description: 'Repositories delivered to counts distinct targets with retained completed delivery evidence in the selected horizon and compares them with the distinct registered target set.',
       data: { sources: expect.arrayContaining([
-        'outcomes',
-        'runs',
-        'dispatches',
-        'factory-rhythm-baseline',
-        'grader-observations',
-        'repositories',
-        'workflows'
+        'overview-outcome-summary',
+        'overview-run-summary',
+        'overview-dispatch-summary',
+        'overview-value-summary',
+        'overview-registered-repository-summary',
+        'overview-worker-summary',
+        'overview-rhythm'
       ]) },
       mark: 'element',
       element: 'outcomes-overview',
@@ -853,7 +854,7 @@ dashboard:
       });
     }
     expect(packagesView.data.source).toBe('package-inventory');
-    expect(packagesView.encoding.href).toEqual({ field: 'package-link', type: 'nominal' });
+    expect(packagesView.encoding.href).toEqual({ field: 'package-dashboard-link', type: 'nominal' });
     expect(packagesView.encoding.columns.map((/** @type {{ title: string }} */ column) => column.title)).toEqual([
       'Package',
       'Workflows',

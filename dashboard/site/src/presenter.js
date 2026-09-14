@@ -12,21 +12,15 @@ import { enableDetailsMenuDismissal, formatMediumUtcDateTime, renderEmptyMessage
 import { customViewAvailabilityMessage, renderCustomViewStateDetails, renderLayoutSectionChrome, renderPageSection, renderViewDisclosure } from './components/view-chrome.js';
 import { formatString, toNumber, stringOrFallback } from './view-formatters.js';
 import { findLink } from './components/link-content.js';
-import { elementHandlesEmptyRows, elementLoadsSourcesAsync, renderUiElement, renderUiElementAsync } from './components/ui-elements.js';
+import { elementHandlesEmptyRows, elementLoadsSourcesAsync, renderUiElement } from './components/ui-elements.js';
 import { renderDataView, supportsIncrementalChartContinuation } from './components/data-view.js';
 import { enableHorizonOutsideClickDismissal, renderFilterBar, setTimeWindowFilter, setTimeWindowRange } from './components/filter-bar.js';
 import { renderSiteCallouts } from './components/site-callout.js';
 import { restoreDashboardTheme } from './components/theme-settings.js';
 import { disconnectLazyViews, enableLazyViews, renderLazyView, trackViewTransition } from './components/lazy-view.js';
 import { DASHBOARD_RENDER_EVENT, emitDashboardDebugEvent } from './debug-events.js';
-import { processRows } from './data-processor.js';
-import { deriveOverviewSources } from './overview-data.js';
-import { deriveRepositorySources } from './repository-data.js';
-import { deriveRuntimeSources } from './runtime-data.js';
-import { deriveWorkflowSources } from './workflow-data.js';
-import { deriveDataHealthCalloutSources } from './data-health.js';
+import { dashboardViewAliasName } from './data/queries/view-payload-compiler.js';
 import { dashboardHorizonHours, formatDashboardHorizon, formatDashboardHorizonHours, resolveDashboardHorizon } from './horizon.js';
-import { deriveDashboardLinkSources, deriveEntityLinkSources } from './inferred-sources.js';
 import { sourceContinuation } from './data/continuation.js';
 import { createDatabaseCountLoader, formatDatabaseCounts } from './database-counts.js';
 import { scopedStorageKey } from './storage-scope.js';
@@ -76,7 +70,11 @@ import { scopedStorageKey } from './storage-scope.js';
  */
 
 /**
- * @typedef {{ document: PresentationDocument, sources: Record<string, LogicalSourceInput>, viewer?: LocalViewer | null, prepared?: boolean, loading?: boolean, tableRowLimit?: number, loadPageSources?: (pageId: string) => Promise<Record<string, LogicalSourceInput>>, loadHorizonSources?: () => Promise<Record<string, LogicalSourceInput>> }} PresentationInput
+ * @typedef {{ signal: AbortSignal, onUpdate: (sources: Record<string, LogicalSourceInput>) => void, routeParameters?: Record<string, string>, queryContext?: { filters?: Record<string, string[]>, search?: { fields: string[], query: string }, orderBy?: Array<{ field: string, direction?: 'asc'|'desc' }>, timeWindow?: { start?: string, end?: string } } }} PageSourceLoadOptions
+ */
+
+/**
+ * @typedef {{ document: PresentationDocument, sources: Record<string, LogicalSourceInput>, viewer?: LocalViewer | null, prepared?: boolean, loading?: boolean, tableRowLimit?: number, loadPageSources?: (pageId: string, options: PageSourceLoadOptions) => Promise<Record<string, LogicalSourceInput>>, loadHorizonSources?: () => Promise<Record<string, LogicalSourceInput>> }} PresentationInput
  */
 
 /**
@@ -87,7 +85,8 @@ const DEFAULT_GITHUB_URL_BASE = 'https://github.com';
 const TABLE_ROW_LIMIT = Symbol('table-row-limit');
 const SIDEBAR_COLLAPSED_STORAGE_KEY = scopedStorageKey('central-agentic-ops.dashboard.sidebar-collapsed');
 const NAVIGATION_INDEX_STATE_KEY = 'centralAgenticOpsNavigationIndex';
-const TOP_LEVEL_VIEW_PAGE_IDS = new Set(['home', 'work', 'agents', 'insights']);
+/** @type {WeakMap<HTMLElement, () => void>} */
+const dashboardDisposals = new WeakMap();
 const directionalViewTransitions = new WeakMap();
 
 /**
@@ -237,21 +236,7 @@ export function renderDashboard(input) {
   const dashboardRepository = typeof document.dashboard.repository === 'string' && document.dashboard.repository.length > 0
     ? document.dashboard.repository
     : null;
-  const derivedSources = input.prepared
-    ? rawSources
-    : deriveDashboardLinkSources(
-      deriveRuntimeSources(
-        deriveRepositorySources(deriveOverviewSources(deriveWorkflowSources(deriveEntityLinkSources(rawSources, githubUrlBase))))
-      ),
-      { githubUrlBase, pages }
-    );
-  const dataHealthSources = input.prepared ? {} : deriveDataHealthCalloutSources(rawSources);
-  const sources = {
-    ...derivedSources,
-    ...Object.fromEntries(
-      Object.entries(dataHealthSources).filter(([name]) => name.startsWith('data-health-'))
-    )
-  };
+  const sources = rawSources;
   const orgName = inferOrganizationName(sources) || 'GitHub';
   const sidebarTitle = dashboardRepository?.split('/').at(-1) || orgName;
   const evaluatedAt = dataHorizon?.end ?? latestRetrievedAt(sources) ?? new Date().toISOString();
@@ -295,19 +280,20 @@ export function renderDashboard(input) {
     setTimeWindowRange(event.detail?.range, root);
   });
   enableResponsiveReportActions(root);
-  enableDashboardPageNavigation(
+  const disposeNavigation = enableDashboardPageNavigation(
     root,
     document.dashboard.title,
-    (pageId) => {
+    (pageId, options) => {
       const pageIndex = pages.findIndex((candidate) => candidate.id === pageId);
       const page = pages[pageIndex];
       if (!page) return null;
       /** @param {Record<string, LogicalSourceInput>} pageSources */
       const render = (pageSources) => showInitialLoadingSkeleton
         ? renderPageLoadingSkeleton(page)
-        : renderPage(page, pageSources, isPlainObject(document.dashboard.units) ? document.dashboard.units : {}, dashboardDefaults);
+        : renderPage(page, pageSources, isPlainObject(document.dashboard.units) ? document.dashboard.units : {}, dashboardDefaults, options.queryContext);
       if (input.loadPageSources) {
-        return input.loadPageSources(pageId).then(render);
+        options.onUpdate = (pageSources) => options.renderUpdate(render(pageSources));
+        return input.loadPageSources(pageId, options).then(render);
       }
       const renderedPage = render(sources);
       /** @param {HTMLElement} rendered */
@@ -319,14 +305,18 @@ export function renderDashboard(input) {
       };
       return renderedPage instanceof Promise ? renderedPage.then(annotate) : annotate(renderedPage);
     },
-    sidebar.dataset.defaultPageId
+    sidebar.dataset.defaultPageId,
+    Boolean(input.loadPageSources)
 
   );
+  dashboardDisposals.set(root, disposeNavigation);
   return root;
 }
 
 /** @param {HTMLElement} root */
 export function disposeDashboard(root) {
+  dashboardDisposals.get(root)?.();
+  dashboardDisposals.delete(root);
   for (const page of root.querySelectorAll('.dashboard-page')) {
     if (page instanceof HTMLElement) disconnectLazyViews(page);
   }
@@ -963,17 +953,18 @@ function renderPageSkeleton() {
  * @param {Record<string, LogicalSourceInput>} sources
  * @param {Record<string, { name: string, symbol: string, significant: number }>} units
  * @param {Record<string, unknown>} dashboardDefaults
+ * @param {PageSourceLoadOptions['queryContext']} [queryContext]
  * @returns {HTMLElement}
  */
-function renderPage(page, sources, units, dashboardDefaults) {
+function renderPage(page, sources, units, dashboardDefaults, queryContext) {
   const title = getPageTitle(page);
 
   if (page.kind === 'built-in') {
     const payload = getBuiltInPagePayload(page);
-    return renderCustomPage(payload, title, sources, units, dashboardDefaults);
+    return renderCustomPage(payload, title, sources, units, dashboardDefaults, true, queryContext);
   }
 
-  return renderCustomPage(page, title, sources, units, dashboardDefaults);
+  return renderCustomPage(page, title, sources, units, dashboardDefaults, true, queryContext);
 }
 
 /**
@@ -983,9 +974,10 @@ function renderPage(page, sources, units, dashboardDefaults) {
  * @param {Record<string, { name: string, symbol: string, significant: number }>} units
  * @param {Record<string, unknown>} dashboardDefaults
  * @param {boolean} [withFilterBar]
+ * @param {PageSourceLoadOptions['queryContext']} [queryContext]
  * @returns {HTMLElement}
  */
-function renderCustomPage(page, title, sources, units, dashboardDefaults, withFilterBar = true) {
+function renderCustomPage(page, title, sources, units, dashboardDefaults, withFilterBar = true, queryContext) {
   const effectiveDashboardDefaults = inventoryPage(page.id)
     ? { ...dashboardDefaults, time: undefined }
     : dashboardDefaults;
@@ -1029,7 +1021,7 @@ function renderCustomPage(page, title, sources, units, dashboardDefaults, withFi
       )
     );
     const render = () => {
-      const rendered = renderCustomView(page.id, view, index, sources, units, headingTag, routeParameter);
+      const rendered = renderCustomView(page.id, view, index, sources, units, headingTag, routeParameter, queryContext);
       suppressSupplementalTableHeading(rendered, view, index);
       if (disclosure === 'essential') {
         rendered.classList.add('custom-view');
@@ -1075,48 +1067,20 @@ function renderCustomPage(page, title, sources, units, dashboardDefaults, withFi
 
   /** @type {HTMLElement} */
   let root;
-  let filterRevision = 0;
   const filterBar = withFilterBar && !inventoryPage(page.id)
     ? renderFilterBar((filters, timeWindow) => {
-      const revision = ++filterRevision;
-      const result = filterDashboardSources(
-        sources,
-        filters,
-        page.id === 'readiness' ? undefined : timeWindow,
-        page.id === 'readiness'
-          ? new Set(['runs', 'findings', 'outcomes'])
-          : new Set([...pageSources.keys()].filter((name) => (
-            page.id !== 'overview' || !['repositories', 'workflows', 'factory-rhythm-baseline'].includes(name)
-          )))
-      );
-      /** @type {(filteredSources: Record<string, LogicalSourceInput>) => void} */
-      const apply = (filteredSources) => {
-        if (revision !== filterRevision) return;
-        const pageFilteredSources = page.id === 'readiness'
-          ? completedRunSources(filteredSources)
-          : filteredSources;
-        const effectiveSources = page.id === 'readiness'
-          ? deriveOverviewSources(pageFilteredSources, { readinessWindow: timeWindow })
-          : pageFilteredSources;
-        void renderCustomPageAsync(
-          page,
-          title,
-          effectiveSources,
-          units,
-          dashboardDefaults,
-          false
-        ).then((replacement) => {
-          if (revision !== filterRevision) return;
-          const detailsState = [...root.querySelectorAll('details')].map((details) => details.open);
-          [...replacement.querySelectorAll('details')].forEach((details, index) => {
-            if (detailsState[index] !== undefined) details.open = detailsState[index];
-          });
-          root.replaceChildren(...replacement.children);
-          enableLazyViews(root);
-          dispatchPageRoute(root, root.dataset.routeParameter ?? '', root.dataset.routeValue ?? '');
-        }).catch(() => {});
-      };
-      result.then(apply).catch(() => {});
+      root.dispatchEvent(new CustomEvent('dashboard-query-context-change', {
+        bubbles: true,
+        detail: {
+          pageId: page.id,
+          queryContext: {
+            filters: Object.fromEntries([...filters.entries()]),
+            ...(page.id === 'readiness' || !timeWindow
+              ? {}
+              : { timeWindow: { start: timeWindow.start, end: timeWindow.end } })
+          }
+        }
+      }));
     }, {
       defaultRange: isPlainObject(dashboardDefaults.time) && typeof dashboardDefaults.time.range === 'string'
         ? dashboardDefaults.time.range
@@ -1148,49 +1112,6 @@ function renderCustomPage(page, title, sources, units, dashboardDefaults, withFi
 }
 
 /**
- * @param {Record<string, LogicalSourceInput>} sources
- * @returns {Record<string, LogicalSourceInput>}
- */
-function completedRunSources(sources) {
-  if (!Array.isArray(sources.runs?.rows)) return sources;
-  return {
-    ...sources,
-    runs: {
-      ...sources.runs,
-      rows: sources.runs.rows.filter((row) => String(row['run-status']) === 'completed')
-    }
-  };
-}
-
-/**
- * @param {Record<string, LogicalSourceInput>} sources
- * @param {Map<string, string[]>} filters
- * @param {{ start: string, end: string } | undefined} [timeWindow]
- * @param {Set<string>} [timeSourceNames]
- * @returns {Promise<Record<string, LogicalSourceInput>>}
- */
-async function filterDashboardSources(sources, filters, timeWindow, timeSourceNames) {
-  const entries = await Promise.all(Object.entries(sources).map(async ([name, source]) => {
-    if (!Array.isArray(source?.rows) || source.rows.length === 0) return [name, source];
-    const predicates = [...filters].flatMap(([configuredField, values]) => {
-      const field = configuredField === 'mode' ? 'rollout-mode' : configuredField;
-      return source.rows.some((row) => Object.hasOwn(row, field))
-        ? [{ field, in: values }]
-        : [];
-    });
-    let rows = predicates.length === 0
-      ? source.rows
-      : await processRows(source.rows, [{ op: 'filter', predicates }]);
-    if (timeWindow && timeSourceNames?.has(name)) {
-      rows = rows.filter((row) => rowMatchesTime(row, timeWindow));
-    }
-    if (rows === source.rows) return [name, source];
-    return [name, { ...source, rows }];
-  }));
-  return Object.fromEntries(entries);
-}
-
-/**
  * @param {Array<LogicalSourceInput | undefined>} sources
  * @returns {string | undefined}
  */
@@ -1200,20 +1121,6 @@ function latestSourceCoverageEnd(sources) {
     .filter((value) => typeof value === 'string' && Number.isFinite(Date.parse(value)))
     .map(String)
     .toSorted((left, right) => Date.parse(right) - Date.parse(left))[0];
-}
-
-/**
- * @param {Record<string, unknown>} view
- * @param {Record<string, LogicalSourceInput>} sources
- * @returns {string[]}
- */
-function resolveViewContextDetails(view, sources) {
-  const sourceName = getViewSources(view)[0] ?? null;
-  if (!sourceName) return ['Source unavailable.'];
-  const sourceInput = sources[sourceName];
-  return sourceInput && Array.isArray(sourceInput.rows)
-    ? []
-    : [`Source unavailable: ${sourceName}`];
 }
 
 /**
@@ -1291,16 +1198,21 @@ function renderLayoutSection(pageId, section, renderedViews, sources) {
  * Shows a single dashboard page and keeps sidebar state synchronized with the URL hash.
  * @param {HTMLElement} root
  * @param {string} dashboardTitle
- * @param {(pageId: string) => HTMLElement | Promise<HTMLElement> | null} [renderPageById]
+ * @param {(pageId: string, options: PageSourceLoadOptions & { renderUpdate: (page: HTMLElement) => void }) => HTMLElement | Promise<HTMLElement> | null} [renderPageById]
  * @param {string} [defaultPageId]
+ * @param {boolean} [reloadPopulatedPages]
+ * @returns {() => void}
  */
-export function enableDashboardPageNavigation(root, dashboardTitle = '', renderPageById, defaultPageId = '') {
+export function enableDashboardPageNavigation(root, dashboardTitle = '', renderPageById, defaultPageId = '', reloadPopulatedPages = false) {
   const pages = [...root.querySelectorAll('.dashboard-page')]
     .filter((page) => page instanceof HTMLElement);
   /** @type {Map<string, { details: boolean[], scrollTop: number }>} */
   const pageState = new Map();
   let activePageId = '';
   let activationRevision = 0;
+  let pageOwner = new AbortController();
+  /** @type {Map<string, { filters?: Record<string, string[]>, timeWindow?: { start?: string, end?: string } }>} */
+  const pageQueryContext = new Map();
   const overviewPage = pages.find((page) => page.dataset.pageId === 'overview');
   const links = [...root.querySelectorAll('[data-nav-page-id], [data-mobile-nav-page-id]')]
     .filter((link) => link instanceof HTMLAnchorElement);
@@ -1325,7 +1237,7 @@ export function enableDashboardPageNavigation(root, dashboardTitle = '', renderP
     hidden: link instanceof HTMLElement ? link.hidden : false
   }));
   if (pages.length === 0 || links.length === 0) {
-    return;
+    return () => pageOwner.abort();
   }
 
   root.addEventListener('dashboard-route-allocation', (event) => {
@@ -1410,6 +1322,8 @@ export function enableDashboardPageNavigation(root, dashboardTitle = '', renderP
    */
   const activate = (pageId, parameters = new URLSearchParams(), deferPopulation = false) => {
     const revision = ++activationRevision;
+    pageOwner.abort();
+    pageOwner = new AbortController();
     let pagePopulated = false;
     const dashboardHorizon = root.querySelector('.dashboard-horizon');
     let activeFilterBar = root.querySelector('.report-actions > .filter-bar');
@@ -1467,16 +1381,16 @@ export function enableDashboardPageNavigation(root, dashboardTitle = '', renderP
       }
     }
     activePageId = pageId;
+    const routeParameters = Object.fromEntries([...parameters.entries()].map(([key, value]) => [key, value]));
+    const queryContext = pageQueryContext.get(pageId);
     root.classList.toggle('dashboard-mobile-overview-actions', pageId === overviewPage?.dataset.pageId);
     const pageIndex = pages.findIndex((candidate) => candidate.dataset.pageId === pageId);
     const pendingPage = pages[pageIndex];
-    if (pendingPage?.hasAttribute('data-page-pending')) {
+    if (pendingPage && (pendingPage.hasAttribute('data-page-pending') || reloadPopulatedPages)) {
       const populate = () => {
         if (revision !== activationRevision || activePageId !== pageId) return;
-        const currentPage = pages[pageIndex];
-        if (!currentPage?.hasAttribute('data-page-pending')) return;
-        const rendered = renderPageById?.(pageId);
-        if (!rendered) return;
+        let currentPage = pages[pageIndex];
+        if (!currentPage) return;
         /** @param {HTMLElement} renderedPage */
         const replacePage = (renderedPage) => {
           if (revision !== activationRevision || activePageId !== pageId || !currentPage.parentNode) return;
@@ -1487,6 +1401,7 @@ export function enableDashboardPageNavigation(root, dashboardTitle = '', renderP
           renderedPage.dataset.routeValue = currentPage.dataset.routeValue ?? '';
           currentPage.replaceWith(renderedPage);
           pages[pageIndex] = renderedPage;
+          currentPage = renderedPage;
           enableLazyViews(renderedPage);
           emitDashboardDebugEvent(root.ownerDocument, DASHBOARD_RENDER_EVENT, {
             kind: 'page',
@@ -1501,9 +1416,19 @@ export function enableDashboardPageNavigation(root, dashboardTitle = '', renderP
             restoreScroll(renderedPage);
           }
         };
+        const rendered = renderPageById?.(pageId, {
+          signal: pageOwner.signal,
+          onUpdate: () => {},
+          routeParameters,
+          queryContext,
+          renderUpdate: replacePage
+        });
+        if (!rendered) return;
         if (rendered instanceof Promise) {
-          pendingPage.replaceChildren(renderPageSkeleton());
-          pendingPage.setAttribute('aria-busy', 'true');
+          if (pendingPage.hasAttribute('data-page-pending')) {
+            pendingPage.replaceChildren(renderPageSkeleton());
+            pendingPage.setAttribute('aria-busy', 'true');
+          }
           void rendered.then(replacePage).catch(() => {
             if (revision !== activationRevision || activePageId !== pageId || !currentPage.parentNode) return;
             currentPage.replaceChildren(renderEmptyMessage('Unable to load this page.', { role: 'alert' }));
@@ -1647,6 +1572,20 @@ export function enableDashboardPageNavigation(root, dashboardTitle = '', renderP
     updateWithViewTransition(root.ownerDocument, () => activate(pageId, routeFromHash()?.parameters, true), 'forward');
     if (pageTitle instanceof HTMLElement) pageTitle.focus();
   });
+  root.addEventListener('dashboard-query-context-change', (event) => {
+    if (!(event instanceof CustomEvent)) return;
+    const detail = isPlainObject(event.detail) ? event.detail : {};
+    const pageId = typeof detail.pageId === 'string' && detail.pageId
+      ? detail.pageId
+      : activePageId;
+    if (!pageId || pageId !== activePageId || !availableIds.has(pageId)) return;
+    const nextContext = normalizeDashboardQueryContext(detail.queryContext);
+    if (sameDashboardQueryContext(pageQueryContext.get(pageId), nextContext)) return;
+    if (nextContext) pageQueryContext.set(pageId, nextContext);
+    else pageQueryContext.delete(pageId);
+    const route = routeFromHash();
+    activate(route?.pageId ?? pageId, route?.parameters ?? new URLSearchParams(), true);
+  });
 
   // Hiding the app chrome (sidebar/top nav) while a full-view table scrolls resizes the
   // scroll container, which can shrink its scrollable range enough to clamp scrollTop back
@@ -1724,6 +1663,7 @@ export function enableDashboardPageNavigation(root, dashboardTitle = '', renderP
   browserNavigation?.addEventListener('currententrychange', syncHistoryBack);
   defaultView?.addEventListener('popstate', onPopState);
   defaultView?.addEventListener('hashchange', onHashChange);
+  return () => pageOwner.abort();
 }
 
 /**
@@ -1776,121 +1716,6 @@ function getNavigationPageId(link) {
   return link.dataset.navPageId ?? link.dataset.mobileNavPageId ?? '';
 }
 
-/**
- * @param {PresentableCustomPage} page
- * @param {string} title
- * @param {Record<string, LogicalSourceInput>} sources
- * @param {Record<string, { name: string, symbol: string, significant: number }>} units
- * @param {Record<string, unknown>} dashboardDefaults
- * @param {boolean} [withFilterBar]
- * @returns {Promise<HTMLElement>}
- */
-async function renderCustomPageAsync(page, title, sources, units, dashboardDefaults, withFilterBar = true) {
-  const effectiveDashboardDefaults = inventoryPage(page.id)
-    ? { ...dashboardDefaults, time: undefined }
-    : dashboardDefaults;
-  const views = Array.isArray(page.views)
-    ? page.views.map((view) => applyDashboardDefaults(view, effectiveDashboardDefaults))
-    : [];
-  const sections = Array.isArray(page.sections) ? page.sections : [];
-  const standaloneCalloutViewIds = new Set(sections.flatMap((section) => {
-    if (!Array.isArray(section.views) || section.views.length !== 1) return [];
-    const viewId = section.views[0];
-    const candidate = views.find((entry) => isPlainObject(entry) && entry.id === viewId);
-    return isPlainObject(candidate) && candidate.mark === 'callout' ? [viewId] : [];
-  }));
-  const routeParameter = typeof page.route?.['hash-query-parameter'] === 'string'
-    ? page.route['hash-query-parameter']
-    : undefined;
-  const routeNavigationPage = typeof page.route?.['navigation-page'] === 'string'
-    ? page.route['navigation-page']
-    : undefined;
-  const pageSources = new Map();
-  for (const view of views) {
-    for (const sourceName of getViewSources(view)) {
-      if (sources[sourceName]) pageSources.set(sourceName, sources[sourceName]);
-    }
-  }
-  const renderedViews = await Promise.all(views.map(async (view, index) => {
-    const viewId = isPlainObject(view) && typeof view.id === 'string' ? view.id : '';
-    const headingTag = sections.length > 0 && !standaloneCalloutViewIds.has(viewId) ? 'h4' : 'h3';
-    const layout = isPlainObject(view) && typeof view.layout === 'string' ? view.layout : 'full';
-    const disclosure = isPlainObject(view) && view.disclosure === 'supplemental' ? 'supplemental' : 'essential';
-    const render = async () => {
-      const rendered = isPlainObject(view) && (view.mark === 'element' || typeof view.element === 'string')
-        ? await renderElementViewAsync(page.id, getViewTitle(view, index), view, sources, resolveViewContextDetails(view, sources), headingTag, routeParameter)
-        : renderCustomView(page.id, view, index, sources, units, headingTag, routeParameter);
-      suppressSupplementalTableHeading(rendered, view, index);
-      if (disclosure === 'essential') {
-        rendered.classList.add('custom-view');
-        rendered.setAttribute('data-view-id', viewId || `view-${index + 1}`);
-        rendered.setAttribute('data-view-layout', layout);
-      }
-      rendered.setAttribute('data-disclosure', disclosure);
-      return rendered;
-    };
-    const isRouteView = Boolean(
-      routeParameter
-      && isPlainObject(view)
-      && (
-        view.mark === 'element'
-        || typeof view.element === 'string'
-        || (isPlainObject(view.data) && typeof view.data['route-field'] === 'string')
-      )
-    );
-    const rendered = index === 0
-      || isRouteView
-      || (isPlainObject(view) && (view.locked === true || view.mark === 'callout'))
-      || TOP_LEVEL_VIEW_PAGE_IDS.has(page.id)
-      ? await render()
-      : renderLazyView({
-        label: getViewTitle(view, index),
-        headingLevel: headingTag,
-        minHeight: layout === 'half' || layout === 'third' ? 180 : 280,
-        render
-      });
-    rendered.classList.add('custom-view');
-    rendered.setAttribute('data-view-id', viewId || `view-${index + 1}`);
-    rendered.setAttribute('data-view-layout', layout);
-    rendered.setAttribute('data-disclosure', disclosure);
-    if (disclosure === 'essential') return rendered;
-    rendered.classList.remove('custom-view');
-    rendered.removeAttribute('data-view-layout');
-    return renderViewDisclosure(rendered, layout, disclosure, getViewTitle(view, index));
-  }));
-  const renderedViewsById = new Map(views.map((view, index) => [
-    isPlainObject(view) && typeof view.id === 'string' ? view.id : `view-${index + 1}`,
-    renderedViews[index]
-  ]));
-  const renderedContent = sections.length > 0
-    ? h('div', { className: 'page-layout-grid' }, ...sections.map((section) => renderLayoutSection(page.id, section, renderedViewsById, sources)))
-    : h('div', { className: 'custom-view-grid' }, ...renderedViews);
-  const pageClassName = typeof page['class-name'] === 'string' && page['class-name'].length > 0
-    ? ` ${page['class-name']}`
-    : '';
-  const filterBar = withFilterBar
-    ? renderCustomPage(page, title, sources, units, dashboardDefaults, true).firstElementChild
-    : null;
-  return h(
-    'section',
-    {
-      className: `dashboard-page${pageClassName}`,
-      id: `page-${page.id}`,
-      'data-page-kind': 'custom',
-      'data-page-name': page.id,
-      'data-page-id': page.id,
-      'data-page-title': title,
-      'data-page-description': page.description ?? '',
-      'data-route-parameter': routeParameter,
-      'data-route-navigation-page': routeNavigationPage
-    },
-    ...(filterBar ? [filterBar] : []),
-    ...(renderedViews.length > 0
-      ? [renderHiddenDataStateMetrics(summarizeDataState(pageSources)), renderedContent]
-      : [h('p', null, 'No custom views available.')])
-  );
-}
-
 /** @param {string} pageId */
 function inventoryPage(pageId) {
   return pageId === 'agents' || pageId === 'work' || pageId === 'work-tasks' || pageId === 'work-roadmap';
@@ -1920,6 +1745,66 @@ function getViewSources(view) {
     return view.data.sources.filter((source) => typeof source === 'string');
   }
   return typeof view.data.source === 'string' ? [view.data.source] : [];
+}
+
+/**
+ * Resolves the worker-produced payload for one authored view source.
+ * Raw sources remain a fixture-only fallback for direct presenter tests.
+ * @param {Record<string, LogicalSourceInput>} sources
+ * @param {string} pageId
+ * @param {unknown} view
+ * @param {number} viewIndex
+ * @param {string} sourceName
+ * @param {number} sourceIndex
+ */
+function resolveViewSourceName(sources, pageId, view, viewIndex, sourceName, sourceIndex) {
+  const alias = dashboardViewAliasName(pageId, view, viewIndex, sourceName, sourceIndex);
+  return sources[alias] ? alias : sourceName;
+}
+
+/** @param {unknown} value @returns {PageSourceLoadOptions['queryContext']} */
+function normalizeDashboardQueryContext(value) {
+  if (!isPlainObject(value)) return undefined;
+  const filters = isPlainObject(value.filters)
+    ? Object.fromEntries(Object.entries(value.filters).flatMap(([field, values]) => {
+        const normalized = Array.isArray(values)
+          ? values.filter((entry) => typeof entry === 'string').map(String)
+          : [];
+        return normalized.length > 0 ? [[field, normalized]] : [];
+      }))
+    : undefined;
+  const search = isPlainObject(value.search)
+    && Array.isArray(value.search.fields)
+    && typeof value.search.query === 'string'
+    ? {
+        fields: value.search.fields.filter((field) => typeof field === 'string' && field.trim()).map(String),
+        query: value.search.query.trim()
+      }
+    : undefined;
+  const orderBy = Array.isArray(value.orderBy)
+    ? value.orderBy.flatMap((ordering) => {
+        if (!isPlainObject(ordering) || typeof ordering.field !== 'string' || !ordering.field.trim()) return [];
+        const direction = ordering.direction === 'asc' || ordering.direction === 'desc' ? ordering.direction : undefined;
+        return [{ field: ordering.field, ...(direction ? { direction } : {}) }];
+      })
+    : [];
+  const timeWindow = isPlainObject(value.timeWindow)
+    ? {
+        start: typeof value.timeWindow.start === 'string' ? value.timeWindow.start : undefined,
+        end: typeof value.timeWindow.end === 'string' ? value.timeWindow.end : undefined
+      }
+    : undefined;
+  return {
+    ...(filters && Object.keys(filters).length > 0 ? { filters } : {}),
+    ...(search && search.fields.length > 0 && search.query ? { search } : {}),
+    ...(orderBy.length > 0 ? { orderBy } : {}),
+    ...(timeWindow?.start || timeWindow?.end ? { timeWindow } : {})
+  };
+}
+
+/** @param {PageSourceLoadOptions['queryContext']} left @param {PageSourceLoadOptions['queryContext']} right */
+function sameDashboardQueryContext(left, right) {
+  return JSON.stringify(left ?? {}) === JSON.stringify(right ?? {});
 }
 
 /**
@@ -1965,9 +1850,10 @@ function summarizeDataState(pageSources) {
  * @param {Record<string, { name: string, symbol: string, significant: number }>} units
  * @param {'h3'|'h4'} [headingTag]
  * @param {string} [routeParameter]
+ * @param {PageSourceLoadOptions['queryContext']} [queryContext]
  * @returns {HTMLElement}
  */
-function renderCustomView(pageId, view, index, sources, units, headingTag = 'h3', routeParameter) {
+function renderCustomView(pageId, view, index, sources, units, headingTag = 'h3', routeParameter, queryContext) {
   const fallbackTitle = `View ${index + 1}`;
   if (!isPlainObject(view)) {
     return renderCustomViewState(pageId, fallbackTitle, null, 'unavailable', ['Invalid custom view definition.'], headingTag);
@@ -1975,36 +1861,29 @@ function renderCustomView(pageId, view, index, sources, units, headingTag = 'h3'
 
   const title = getViewTitle(view, index);
 
-  if (
-    routeParameter
-    && isPlainObject(view.data)
-    && typeof view.data['route-field'] === 'string'
-    && view.mark !== 'element'
-  ) {
-    return renderRouteScopedDataView(pageId, view, index, sources, units, headingTag, routeParameter);
-  }
-
   /** @type {string[]} */
   const contextDetails = [];
 
   if (view.mark === 'element') {
-    return renderElementView(pageId, title, view, sources, contextDetails, headingTag, routeParameter);
+    return renderElementView(pageId, title, view, index, sources, contextDetails, headingTag, routeParameter, queryContext);
   }
   if (view.mark === 'callout') {
     return renderCalloutView(pageId, view, title, headingTag);
   }
 
-  const sourceName = getViewSources(view)[0] ?? null;
-  if (!sourceName) {
+  const authoredSourceName = getViewSources(view)[0] ?? null;
+  if (!authoredSourceName) {
     return renderCustomViewState(pageId, title, null, 'unavailable', ['Source unavailable.'], headingTag);
   }
 
-  const sourceInput = sources[sourceName];
+  const resolvedSourceName = resolveViewSourceName(sources, pageId, view, index, authoredSourceName, 0);
+
+  const sourceInput = sources[resolvedSourceName];
   if (!sourceInput || !Array.isArray(sourceInput.rows)) {
-    return renderCustomViewState(pageId, title, sourceName, 'unavailable', [`Source unavailable: ${sourceName}`], headingTag);
+    return renderCustomViewState(pageId, title, authoredSourceName, 'unavailable', [`Source unavailable: ${authoredSourceName}`], headingTag);
   }
 
-  const filteredRows = filterRowsForView(sourceInput.rows, view.data);
+  const filteredRows = sourceInput.rows;
   const metadata = sourceInput.metadata;
   const state = sourceInput.metadata?.availability ?? inferAvailability(filteredRows);
   const emptyMessage = typeof view['empty-message'] === 'string' ? view['empty-message'] : undefined;
@@ -2016,7 +1895,7 @@ function renderCustomView(pageId, view, index, sources, units, headingTag = 'h3'
     return renderCustomViewState(
       pageId,
       title,
-      sourceName,
+      authoredSourceName,
       state,
       contextDetails,
       headingTag,
@@ -2025,7 +1904,7 @@ function renderCustomView(pageId, view, index, sources, units, headingTag = 'h3'
   }
 
   if (filteredRows.length === 0 && view.mark !== 'table' && !isMetricCard) {
-    return renderCustomViewState(pageId, title, sourceName, 'empty', contextDetails, headingTag, emptyMessage);
+    return renderCustomViewState(pageId, title, authoredSourceName, 'empty', contextDetails, headingTag, emptyMessage);
   }
 
   // Swimlanes consume the same paginated run source as their companion lazy
@@ -2037,7 +1916,7 @@ function renderCustomView(pageId, view, index, sources, units, headingTag = 'h3'
     pageId,
     title,
     view,
-    sourceName,
+    sourceName: authoredSourceName,
     rows: filteredRows,
     rowLimit: Number(/** @type {Record<PropertyKey, unknown>} */ (view.data ?? {})[TABLE_ROW_LIMIT]),
     metadata,
@@ -2053,7 +1932,7 @@ function renderCustomView(pageId, view, index, sources, units, headingTag = 'h3'
       load: async (token) => {
         const next = await sourcePage.load(token);
         return {
-          rows: filterRowsForView(next?.rows ?? [], view.data),
+          rows: next?.rows ?? [],
           continuationToken: next?.continuationToken
         };
       }
@@ -2061,7 +1940,7 @@ function renderCustomView(pageId, view, index, sources, units, headingTag = 'h3'
   });
   if (rendered) return rendered;
 
-  return renderCustomViewState(pageId, title, sourceName, 'unavailable', [...contextDetails, 'Unsupported view mark.'], headingTag);
+  return renderCustomViewState(pageId, title, authoredSourceName, 'unavailable', [...contextDetails, 'Unsupported view mark.'], headingTag);
 }
 
 /**
@@ -2091,107 +1970,6 @@ function renderCalloutView(pageId, view, title, headingTag) {
     ),
     h('p', null, typeof view.description === 'string' ? view.description : '')
   );
-}
-
-/**
- * @param {string} pageId
- * @param {Record<string, any>} view
- * @param {number} index
- * @param {Record<string, LogicalSourceInput>} sources
- * @param {Record<string, { name: string, symbol: string, significant: number }>} units
- * @param {'h3'|'h4'} headingTag
- * @param {string} routeParameter
- */
-function renderRouteScopedDataView(pageId, view, index, sources, units, headingTag, routeParameter) {
-  const sourceName = typeof view.data?.source === 'string' ? view.data.source : '';
-  const routeField = String(view.data?.['route-field'] ?? '');
-  const root = h('div', { 'data-route-view': '', 'data-route-parameter': routeParameter });
-  const data = { ...view.data };
-  delete data['route-field'];
-  const scopedView = { ...view, data };
-  /** @param {unknown} routeValue */
-  const render = (routeValue) => {
-    const selected = typeof routeValue === 'string' ? routeValue.trim() : '';
-    const source = sources[sourceName];
-    const routeRows = source && Array.isArray(source.rows)
-      ? source.rows.filter((row) => (
-          selected.length > 0
-          && String(row[routeField] ?? '').toLowerCase() === selected.toLowerCase()
-        ))
-      : [];
-    if (view.chart === 'swimlane' && selected.length > 0) {
-      const workflowExists = Array.isArray(sources.workflows?.rows) && sources.workflows.rows.some((row) => {
-        const repositoryName = String(row.repository ?? '').trim();
-        const repository = repositoryName.includes('/') || !String(row.organization ?? '').trim()
-          ? repositoryName
-          : `${String(row.organization).trim()}/${repositoryName}`;
-        return `${repository}:${String(row.workflow ?? '').trim()}`.toLowerCase() === selected.toLowerCase();
-      });
-      if (!workflowExists) {
-        root.replaceChildren(renderSwimlaneRouteState(
-          pageId,
-          getViewTitle(view, index),
-          'Workflow not found',
-          'The selected workflow could not be resolved for this repository/ref.',
-          headingTag
-        ));
-        return;
-      }
-      const dataWithoutFilters = { ...data };
-      delete dataWithoutFilters.filters;
-      const intervalRows = filterRowsForView(routeRows, dataWithoutFilters);
-      const visibleRows = filterRowsForView(routeRows, data);
-      if (visibleRows.length === 0) {
-        const filteredEmpty = intervalRows.length > 0
-          && isPlainObject(data.filters)
-          && Object.keys(data.filters).length > 0;
-        root.replaceChildren(renderSwimlaneRouteState(
-          pageId,
-          getViewTitle(view, index),
-          filteredEmpty ? 'No runs match the current filters.' : 'No workflow runs in this period',
-          filteredEmpty ? 'Clear filters' : 'Try increasing the time horizon.',
-          headingTag
-        ));
-        return;
-      }
-    }
-    const scopedSources = source && Array.isArray(source.rows)
-      ? {
-          ...sources,
-          [sourceName]: {
-            ...source,
-            rows: routeRows
-          }
-        }
-      : sources;
-    const rendered = renderCustomView(pageId, scopedView, index, scopedSources, units, headingTag);
-    suppressSupplementalTableHeading(rendered, view, index);
-    root.replaceChildren(rendered);
-  };
-  root.addEventListener('dashboard-route-change', (event) => {
-    if (!(event instanceof CustomEvent) || event.detail?.parameter !== routeParameter) return;
-    render(event.detail.value);
-  });
-  render('');
-  return root;
-}
-
-/**
- * @param {string} pageId
- * @param {string} title
- * @param {string} stateTitle
- * @param {string} detail
- * @param {'h3'|'h4'} headingTag
- */
-function renderSwimlaneRouteState(pageId, title, stateTitle, detail, headingTag) {
-  return renderPageSection(pageId, title, [
-    h(
-      'div',
-      { className: 'chart-widget swimlane-chart-widget swimlane-empty-state', role: 'status' },
-      h('strong', null, stateTitle),
-      h('p', null, detail)
-    )
-  ], headingTag);
 }
 
 /**
@@ -2237,13 +2015,15 @@ function suppressSupplementalTableHeading(rendered, view, index) {
  * @param {string} pageId
  * @param {string} title
  * @param {Record<string, unknown>} view
+ * @param {number} viewIndex
  * @param {Record<string, LogicalSourceInput>} sources
  * @param {string[]} contextDetails
  * @param {'h3'|'h4'} headingTag
  * @param {string} [routeParameter]
+ * @param {PageSourceLoadOptions['queryContext']} [queryContext]
  * @returns {HTMLElement}
  */
-function renderElementView(pageId, title, view, sources, contextDetails, headingTag, routeParameter) {
+function renderElementView(pageId, title, view, viewIndex, sources, contextDetails, headingTag, routeParameter, queryContext) {
   const elementName = typeof view.element === 'string' ? view.element : '';
   const sourceNames = getViewSources(view);
   const viewData = isPlainObject(view.data) ? view.data : undefined;
@@ -2251,14 +2031,11 @@ function renderElementView(pageId, title, view, sources, contextDetails, heading
     return renderCustomViewState(pageId, title, null, 'unavailable', [...contextDetails, 'No sources declared for element view.'], headingTag);
   }
 
-  const selectedSources = Object.fromEntries(sourceNames.flatMap((sourceName) => {
-    const source = sources[sourceName];
-    const preserveAgentEvidence = pageId === 'overview'
-      && elementName === 'signal-list'
-      && (sourceName === 'workflows' || sourceName === 'agent-assignments' || sourceName === 'security-observations');
-    const preservePackageInventory = elementName === 'package-route' && sourceName === 'workflows';
+  const selectedSources = Object.fromEntries(sourceNames.flatMap((sourceName, sourceIndex) => {
+    const resolvedName = resolveViewSourceName(sources, pageId, view, viewIndex, sourceName, sourceIndex);
+    const source = sources[resolvedName];
     return source && Array.isArray(source.rows)
-      ? [[sourceName, { ...source, rows: preserveAgentEvidence || preservePackageInventory ? source.rows : filterRowsForView(source.rows, viewData) }]]
+      ? [[sourceName, source]]
       : [];
   }));
 
@@ -2288,8 +2065,8 @@ function renderElementView(pageId, title, view, sources, contextDetails, heading
     time: isPlainObject(viewData?.time) ? viewData.time : undefined,
     titleLink: isPlainObject(view['title-link']) ? view['title-link'] : undefined,
     routeParameter,
+    queryContext,
     viewId: typeof view.id === 'string' ? view.id : undefined,
-    filterRows: (/** @type {Array<Record<string, unknown>>} */ rows) => filterRowsForView(rows, viewData),
     elementConfig: isPlainObject(view.config) ? view.config : undefined,
     headingTag
   });
@@ -2299,86 +2076,6 @@ function renderElementView(pageId, title, view, sources, contextDetails, heading
   return ['summary-grid', 'readiness-verdict'].includes(elementName)
     ? renderPageSection(pageId, title, [rendered], headingTag, typeof view.description === 'string' ? view.description : undefined)
     : rendered;
-}
-
-/**
- * @param {string} pageId
- * @param {string} title
- * @param {Record<string, unknown>} view
- * @param {Record<string, LogicalSourceInput>} sources
- * @param {string[]} contextDetails
- * @param {'h3'|'h4'} headingTag
- * @param {string} [routeParameter]
- * @returns {Promise<HTMLElement>}
- */
-async function renderElementViewAsync(pageId, title, view, sources, contextDetails, headingTag, routeParameter) {
-  const elementName = typeof view.element === 'string' ? view.element : '';
-  const sourceNames = getViewSources(view);
-  const viewData = isPlainObject(view.data) ? view.data : undefined;
-  if (sourceNames.length === 0) {
-    return renderCustomViewState(pageId, title, null, 'unavailable', [...contextDetails, 'No sources declared for element view.'], headingTag);
-  }
-
-  const selectedSources = Object.fromEntries(sourceNames.flatMap((sourceName) => {
-    const source = sources[sourceName];
-    return source && Array.isArray(source.rows)
-      ? [[sourceName, { ...source, rows: filterRowsForView(source.rows, viewData) }]]
-      : [];
-  }));
-
-  if (sourceNames.length === 1) {
-    const sourceName = sourceNames[0];
-    const source = selectedSources[sourceName];
-    if (!source) {
-      return renderCustomViewState(pageId, title, sourceName, 'unavailable', contextDetails, headingTag);
-    }
-    const state = source.metadata?.availability ?? inferAvailability(source.rows);
-    if (state !== 'available' && !(state === 'empty' && elementHandlesEmptyRows(elementName))) {
-      return renderCustomViewState(pageId, title, sourceName, state, contextDetails, headingTag);
-    }
-    if (source.rows.length === 0 && !elementHandlesEmptyRows(elementName)) {
-      return renderCustomViewState(pageId, title, sourceName, 'empty', contextDetails, headingTag);
-    }
-  }
-
-  const rendered = await renderUiElementAsync(elementName, {
-    pageId,
-    title,
-    description: typeof view.description === 'string' ? view.description : undefined,
-    sourceNames,
-    sources: selectedSources,
-    contextDetails,
-    scope: isPlainObject(viewData?.scope) ? viewData.scope : undefined,
-    time: isPlainObject(viewData?.time) ? viewData.time : undefined,
-    titleLink: isPlainObject(view['title-link']) ? view['title-link'] : undefined,
-    routeParameter,
-    viewId: typeof view.id === 'string' ? view.id : undefined,
-    filterRows: (/** @type {Array<Record<string, unknown>>} */ rows) => filterRowsForView(rows, viewData),
-    elementConfig: isPlainObject(view.config) ? view.config : undefined,
-    headingTag
-  });
-  const syncRendered = rendered ?? renderUiElement(elementName, {
-    pageId,
-    title,
-    description: typeof view.description === 'string' ? view.description : undefined,
-    sourceNames,
-    sources: selectedSources,
-    contextDetails,
-    scope: isPlainObject(viewData?.scope) ? viewData.scope : undefined,
-    time: isPlainObject(viewData?.time) ? viewData.time : undefined,
-    titleLink: isPlainObject(view['title-link']) ? view['title-link'] : undefined,
-    routeParameter,
-    viewId: typeof view.id === 'string' ? view.id : undefined,
-    filterRows: (/** @type {Array<Record<string, unknown>>} */ rows) => filterRowsForView(rows, viewData),
-    elementConfig: isPlainObject(view.config) ? view.config : undefined,
-    headingTag
-  });
-  if (!syncRendered) {
-    return renderCustomViewState(pageId, title, null, 'unavailable', [...contextDetails, 'Unsupported UI element.'], headingTag);
-  }
-  return ['summary-grid', 'readiness-verdict'].includes(elementName)
-    ? renderPageSection(pageId, title, [syncRendered], headingTag, typeof view.description === 'string' ? view.description : undefined)
-    : syncRendered;
 }
 
 /**
@@ -2673,29 +2370,6 @@ function chartPointOutputValue(point, field, x, y, color) {
  * @returns {Map<string, { href: string, label: string }>}
  */
 /**
- * @param {Array<Record<string, unknown>>} rows
- * @param {Record<string, unknown> | undefined} dataConfig
- * @returns {Array<Record<string, unknown>>}
- */
-function filterRowsForView(rows, dataConfig) {
-  if (!Array.isArray(rows)) {
-    return [];
-  }
-
-  let filteredRows = rows;
-  if (isPlainObject(dataConfig?.scope)) {
-    filteredRows = filteredRows.filter((row) => rowMatchesScope(row, /** @type {Record<string, unknown>} */ (dataConfig.scope)));
-  }
-  if (isPlainObject(dataConfig?.time)) {
-    filteredRows = filteredRows.filter((row) => rowMatchesTime(row, /** @type {Record<string, unknown>} */ (dataConfig.time)));
-  }
-  if (isPlainObject(dataConfig?.filters)) {
-    filteredRows = filteredRows.filter((row) => rowMatchesFilters(row, /** @type {Record<string, unknown>} */ (dataConfig.filters)));
-  }
-  return filteredRows;
-}
-
-/**
  * @param {unknown} view
  * @param {Record<string, unknown>} dashboardDefaults
  * @returns {unknown}
@@ -2755,108 +2429,6 @@ function resolveDashboardDefaults(defaults, horizonRange, evaluatedAt) {
     ...configured,
     time: { start, end: evaluatedAt }
   };
-}
-
-/**
- * @param {Record<string, unknown>} row
- * @param {Record<string, unknown>} scope
- * @returns {boolean}
- */
-function rowMatchesScope(row, scope) {
-  const scopeToField = {
-    organizations: 'organization',
-    repositories: 'repository',
-    workflows: 'workflow'
-  };
-
-  for (const [scopeKey, fieldName] of Object.entries(scopeToField)) {
-    const allowed = scope[scopeKey];
-    if (!Array.isArray(allowed) || allowed.length === 0) {
-      continue;
-    }
-    const value = row[fieldName];
-    if (typeof value !== 'string' || !allowed.includes(value)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-/**
- * @param {Record<string, unknown>} row
- * @param {Record<string, unknown>} time
- * @returns {boolean}
- */
-function rowMatchesTime(row, time) {
-  const observedField = pickRowTimeField(row);
-  if (!observedField) {
-    return true;
-  }
-
-  const rowInstant = Date.parse(String(row[observedField]));
-  if (!Number.isFinite(rowInstant)) {
-    return false;
-  }
-
-  const start = typeof time.start === 'string' ? Date.parse(time.start) : Number.NaN;
-  const end = typeof time.end === 'string' ? Date.parse(time.end) : Number.NaN;
-  if (Number.isFinite(start) && rowInstant < start) {
-    return false;
-  }
-  if (Number.isFinite(end) && rowInstant >= end) {
-    return false;
-  }
-  return true;
-}
-
-/**
- * @param {Record<string, unknown>} row
- * @returns {string | null}
- */
-function pickRowTimeField(row) {
-  if (typeof row['observed-at'] === 'string') {
-    return 'observed-at';
-  }
-  if (typeof row['started-at'] === 'string') {
-    return 'started-at';
-  }
-  if (typeof row['ended-at'] === 'string') {
-    return 'ended-at';
-  }
-  return null;
-}
-
-/**
- * @param {Record<string, unknown>} row
- * @param {Record<string, unknown>} filters
- * @returns {boolean}
- */
-function rowMatchesFilters(row, filters) {
-  for (const [fieldName, expected] of Object.entries(filters)) {
-    const value = row[fieldName];
-    if (Array.isArray(expected)) {
-      if (!expected.some((candidate) => valuesEqualForFilter(value, candidate))) {
-        return false;
-      }
-      continue;
-    }
-    if (!valuesEqualForFilter(value, expected)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-/**
- * @param {unknown} actual
- * @param {unknown} expected
- * @returns {boolean}
- */
-function valuesEqualForFilter(actual, expected) {
-  if (actual == null) {
-    return expected === 'unknown';
-  }
-  return String(actual) === String(expected);
 }
 
 /**

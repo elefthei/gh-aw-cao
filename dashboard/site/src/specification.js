@@ -28,18 +28,18 @@ export const MAX_CLI_ACTIONS = 20;
 export const MAX_CLI_ACTION_ARGUMENTS = 10;
 export const MAX_CLI_ACTION_COMMAND_LENGTH = 1000;
 
-export const QUERY_KEYS = ['name', 'intent', 'description', 'from', 'joins', 'filter', 'compute', 'aggregate', 'select', 'order-by', 'limit'];
+export const QUERY_KEYS = ['name', 'intent', 'description', 'from', 'time', 'joins', 'filter', 'compute', 'aggregate', 'select', 'order-by', 'limit'];
 export const QUERY_JOIN_KEYS = ['source', 'type', 'on', 'fields'];
 export const QUERY_JOIN_TYPE_VALUES = ['inner', 'left'];
 export const QUERY_JOIN_ON_KEYS = ['left', 'right'];
 export const QUERY_JOIN_FIELD_KEYS = ['field', 'as'];
 export const QUERY_FILTER_KEYS = ['predicates'];
-export const QUERY_PREDICATE_KEYS = ['field', 'equals', 'in', 'includes'];
+export const QUERY_PREDICATE_KEYS = ['field', 'equals', 'in', 'includes', 'gte', 'lt', 'optional'];
 export const QUERY_COMPUTE_KEYS = ['as', 'function', 'args'];
-export const QUERY_COMPUTE_ARGUMENT_KEYS = ['field', 'value'];
+export const QUERY_COMPUTE_ARGUMENT_KEYS = ['field', 'value', 'context'];
 export const QUERY_AGGREGATE_KEYS = ['by', 'values'];
 export const QUERY_AGGREGATE_VALUE_KEYS = ['field', 'as', 'reducer'];
-export const QUERY_REDUCER_VALUES = ['count', 'distinct-count', 'distinct-list', 'sum', 'mean', 'min', 'max'];
+export const QUERY_REDUCER_VALUES = ['count', 'distinct-count', 'distinct-list', 'distinct-values', 'calendar-week-rhythm', 'sum', 'mean', 'min', 'max'];
 export const QUERY_SELECT_KEYS = ['field', 'as'];
 export const QUERY_NUMERIC_REDUCER_VALUES = ['sum', 'mean', 'min', 'max'];
 export const INFERRED_FIELD_NAMES = ['package-link'];
@@ -349,10 +349,8 @@ export const SOURCE_VALUES = [
   'coverage-diagnostics',
   'repository-coverage',
   'runtime-episode-summary',
-  'runtime-episodes',
   'runtime-attribution-gaps',
   'workflow-topology-summary',
-  'packaged-workflows',
   'standalone-workflows',
   'outcomes',
   'findings',
@@ -368,12 +366,10 @@ export const SOURCE_VALUES = [
   'overview-execution-health',
   'failed-runs',
   'overview-attention',
-  'overview-attention-domains',
   'overview-managed-packages',
   'overview-package-utilization',
   'readiness-activity',
   'readiness-checks',
-  'readiness-observations',
   'readiness-summary',
   'readiness-signals',
   'security-summary',
@@ -385,7 +381,6 @@ export const SOURCE_VALUES = [
   'cost-signals',
   'runtime-anomaly-readiness',
   'runtime-signals',
-  'dispatches',
   'factory-rhythm-baseline',
   'dispatch-activation-summary',
   'package-dispatch-state',
@@ -394,14 +389,12 @@ export const SOURCE_VALUES = [
   'repository-workflow-status',
   'repository-workflow-usage',
   'repository-workflows',
-  'workflow-runs',
-  'workflow-reports',
-  'package-reports',
   'model-usage-summary',
   'engine-usage-summary',
   'data-health-collections',
   'data-health-coverage',
   'data-health-schema',
+  'source-metadata',
   'work-items',
   'attention-signals',
   'agent-assignments',
@@ -415,9 +408,9 @@ export const SOURCE_VALUES = [
 export const SOURCE_FIELDS = {
   organizations: ['organization', 'organization-name', 'observed-at', 'organization-link'],
   packages: ['package', 'package-name', 'package-description', 'package-icon', 'package-mode', 'package-enabled', 'package-registration', 'package-max-repositories', 'package-rollout-percent', 'package-monthly-ai-credit-budget', 'package-aic-allowance', 'package-worker-count', 'package-inventory-warnings', 'package-workers', 'package-targets', 'package-min-version', 'package-version', 'package-current-version', 'package-update-state', 'package-experimental', 'package-readme-path', 'package-readme', 'observed-at', 'package-link'],
-  repositories: ['organization', 'repository', 'repository-name', 'rollout-mode', 'observed-at', 'organization-link', 'repository-link'],
+  repositories: ['organization', 'repository', 'repository-name', 'repository-coordinate', 'rollout-mode', 'observed-at', 'organization-link', 'repository-link'],
   workflows: ['organization', 'repository', 'package', 'package-name', 'package-icon', 'workflow', 'workflow-name', 'workflow-role', 'workflow-active', 'admission-status', 'admission-reason', 'gh-aw-version', 'gh-aw-current-version', 'gh-aw-version-label', 'gh-aw-update-state', 'gh-aw-metadata', 'gh-aw-manifest', 'rollout-mode', 'max-ai-credits', 'package-aic-allowance', 'package-worker-count', 'package-inventory-warnings', 'inventory-ready', 'observed-at', 'organization-link', 'repository-link', 'workflow-link', 'external-link'],
-  runs: ['organization', 'repository', 'workflow', 'run', 'run-attempt', 'run-title', 'event', 'branch', 'head-sha', 'created-at', 'started-at', 'ended-at', 'updated-at', 'run-status', 'run-conclusion', 'classification', 'duration', 'action-minutes', 'github-api-calls', 'safe-items-count', 'error-count', 'admission-status', 'admission-reason', 'failure-job', 'failure-message', 'failure-step', 'failure-detail', 'resource', 'resource-reset-at', 'resource-wait-hours', 'rollout-mode', 'agent-id', 'agent-version', 'model-id', 'gh-aw-version', 'aic-total', 'engine', 'engine-id', 'engine-version', 'requested-model', 'resolved-model', 'agent-runtime', 'firewall-version', 'gateway-version', 'data', 'logs-payload', 'organization-link', 'repository-link', 'workflow-link', 'run-link'],
+  runs: ['organization', 'repository', 'workflow', 'run', 'run-attempt', 'run-title', 'target-repository', 'event', 'branch', 'head-sha', 'created-at', 'started-at', 'ended-at', 'updated-at', 'run-status', 'run-conclusion', 'classification', 'duration', 'action-minutes', 'github-api-calls', 'safe-items-count', 'error-count', 'admission-status', 'admission-reason', 'failure-job', 'failure-message', 'failure-step', 'failure-detail', 'resource', 'resource-reset-at', 'resource-wait-hours', 'rollout-mode', 'agent-id', 'agent-version', 'model-id', 'gh-aw-version', 'aic-total', 'engine', 'engine-id', 'engine-version', 'requested-model', 'resolved-model', 'agent-runtime', 'firewall-version', 'gateway-version', 'data', 'logs-payload', 'organization-link', 'repository-link', 'workflow-link', 'run-link'],
   sessions: ['organization', 'repository', 'workflow', 'run', 'run-attempt', 'job-id', 'session', 'session-kind', 'session-status', 'started-at', 'ended-at', 'observed-at'],
   events: ['organization', 'repository', 'workflow', 'run', 'run-attempt', 'session', 'event', 'event-timestamp', 'event-source', 'event-type', 'event-summary', 'event-status', 'correlation-id', 'payload-ref', 'source-sequence', 'observed-at'],
   transactions: ['id', 'kind', 'createdAt', 'payloadScope', 'payloadHash', 'payloadEtag', 'records', 'committedRecords', 'rawPayloadRecords', 'rawRuns', 'agenticRunRecords', 'agenticRuns', 'duplicateRawRunObservations', 'duplicateAgenticRunObservations', 'unenrichedRuns', 'error'],
@@ -443,8 +436,8 @@ export const SOURCE_FIELDS = {
   'data-health-collections': ['operation', 'source', 'state', 'failure-class', 'progress', 'collector-completed-at', 'retrieved-at', 'source-as-of', 'evidence-horizon', 'fallback', 'snapshot-age', 'provenance', 'technical-detail', 'reason'],
   'data-health-coverage': ['area', 'expected', 'observed', 'missing', 'coverage-percent', 'state', 'reason', 'requested-horizon', 'observed-horizon'],
   'data-health-schema': ['source', 'schema'],
+  'source-metadata': ['source', 'row-count', 'source-id', 'source-kind', 'as-of', 'retrieved-at', 'availability', 'completeness', 'freshness', 'collection-operation', 'collection-state', 'collection-progress', 'collection-reason', 'failure-class', 'collector-completed-at', 'coverage-start', 'coverage-end', 'requested-coverage-start', 'requested-coverage-end', 'coverage-expected', 'coverage-observed', 'snapshot-age-seconds', 'fallback-used'],
   'runtime-episode-summary': ['label', 'value'],
-  'runtime-episodes': ['run', 'run-title', 'package', 'workflow', 'started-at', 'duration', 'status', 'control-transition', 'attribution', 'run-link'],
   'runtime-attribution-gaps': ['run', 'run-title', 'workflow', 'status', 'control-transition', 'reason-code', 'evidence', 'run-link'],
   outcomes: ['organization', 'repository', 'package', 'runtime-repository', 'workflow', 'workflow-name', 'run', 'run-conclusion', 'safe-output', 'safe-output-kind', 'outcome-number', 'outcome-title', 'outcome-summary', 'outcome-body-html', 'outcome-category', 'outcome-status', 'outcome-state', 'outcome-warning', 'evidence-strength', 'rollout-mode', 'engine', 'engine-version', 'requested-model', 'resolved-model', 'published-at', 'observed-at', 'issue-link', 'pull-request-link', 'run-link', 'external-link', 'organization-link', 'repository-link', 'workflow-link'],
   'safe-output-performance': ['organization', 'repository', 'workflow', 'run', 'run-conclusion', 'rollout-mode', 'safe-output-kind', 'safe-output-label', 'safe-output-status', 'safe-output-count', 'observed-at', 'run-link'],
@@ -457,10 +450,8 @@ export const SOURCE_FIELDS = {
   'configuration-policy': ['path', 'document', 'raw', 'diagnostics'],
   'configuration-actions': ['action', 'path', 'current', 'recommended', 'prompt'],
   'failed-runs': ['organization', 'repository', 'workflow', 'run', 'run-attempt', 'run-title', 'started-at', 'ended-at', 'run-status', 'run-conclusion', 'failure-detail', 'run-link'],
-  'overview-attention-domains': ['domain', 'state', 'tone', 'icon', 'value', 'detail', 'href', 'priority', 'order'],
   'readiness-activity': ['activity-hour', 'workflow-role', 'run-count'],
   'readiness-checks': ['check', 'readiness-state', 'detail'],
-  'readiness-observations': ['signal', 'count', 'status', 'detail', 'latest-at', 'evidence-link'],
   'readiness-summary': ['label', 'value'],
   'readiness-signals': ['priority', 'urgency', 'count', 'tone', 'icon', 'kind', 'title', 'detail', 'evidence', 'action', 'navigation-page', 'run-link', 'external-link'],
   'security-summary': ['label', 'value'],
@@ -472,7 +463,6 @@ export const SOURCE_FIELDS = {
   'cost-signals': ['priority', 'count', 'tone', 'icon', 'kind', 'title', 'detail', 'evidence', 'action', 'navigation-page'],
   'runtime-anomaly-readiness': ['icon', 'title', 'detail'],
   'runtime-signals': ['priority', 'count', 'tone', 'icon', 'kind', 'title', 'detail', 'evidence', 'action', 'navigation-href'],
-  dispatches: ['started-at', 'dispatch-type', 'package', 'package-name', 'workflow-name', 'run-title', 'runtime-repository', 'status', 'status-detail', 'status-detail-at', 'run-link'],
   'factory-rhythm-baseline': ['daily-averages', 'weeks'],
   'dispatch-activation-summary': ['label', 'value'],
   'package-dispatch-state': ['package', 'package-name', 'dispatch-runs', 'skipped', 'failed', 'succeeded', 'worker-dispatches', 'aic', 'agent', 'model'],
@@ -482,16 +472,13 @@ export const SOURCE_FIELDS = {
   'repository-workflow-status': ['repository', 'status', 'workflows'],
   'repository-workflow-usage': ['repository', 'workflow', 'invocation', 'aic', 'workflow-link'],
   'repository-workflows': ['repository', 'workflow', 'workflow-name', 'workflow-role', 'package-name', 'rollout-mode', 'workflow-active', 'observed-at', 'aic', 'workflow-link'],
-  'workflow-runs': ['workflow-route', 'organization', 'repository', 'workflow', 'run', 'run-title', 'event', 'started-at', 'ended-at', 'run-status', 'run-conclusion', 'failure-job', 'failure-message', 'failure-step', 'rollout-mode', 'engine', 'engine-version', 'gh-aw-version', 'requested-model', 'resolved-model', 'run-link'],
-  'workflow-reports': ['workflow-route', 'safe-output', 'outcome-title', 'outcome-summary', 'outcome-status', 'rollout-mode', 'engine', 'engine-version', 'requested-model', 'resolved-model', 'outcome-category', 'observed-at', 'external-link'],
-  'package-reports': ['package', 'safe-output', 'outcome-title', 'outcome-summary', 'outcome-status', 'rollout-mode', 'engine', 'engine-version', 'requested-model', 'resolved-model', 'outcome-category', 'observed-at', 'external-link'],
   'model-usage-summary': ['model', 'resolved-model', 'engine', 'requested-model', 'runs', 'invocations', 'total-aic', 'estimated-usd', 'pricing'],
   'engine-usage-summary': ['engine', 'runs', 'invocations', 'total-aic', 'estimated-usd', 'min-engine-version', 'max-engine-version', 'models'],
   'run-aggregate-summary': ['engine', 'engine-version', 'requested-model', 'resolved-model', 'run-conclusion', 'runs', 'run-link'],
   'workflow-topology-summary': ['label', 'value'],
   'packaged-workflows': ['package', 'package-name', 'repository', 'workflow', 'workflow-name', 'workflow-role', 'rollout-mode', 'workflow-active', 'runs', 'aic', 'package-link', 'repository-link', 'workflow-link', 'external-link'],
   'standalone-workflows': ['repository', 'workflow', 'workflow-name', 'rollout-mode', 'workflow-active', 'runs', 'aic', 'repository-link', 'workflow-link'],
-  'work-items': ['work-item-id', 'name', 'objective', 'organization', 'repository', 'workflow', 'workflow-name', 'workflow-icon', 'scope', 'domain', 'work-type', 'lifecycle-state', 'phase', 'reason', 'reason-evidence-class', 'next-action', 'next-actor', 'safe-output-kind', 'waiting-on', 'waiting-since', 'owner', 'consequence-tier', 'verification-state', 'outcome-state', 'started-at', 'ended-at', 'observed-at', 'evidence-link', 'repository-link', 'run-link'],
+  'work-items': ['work-item-id', 'name', 'objective', 'organization', 'repository', 'workflow', 'workflow-name', 'workflow-icon', 'workflow-role', 'scope', 'domain', 'package', 'package-name', 'package-icon', 'work-type', 'lifecycle-state', 'phase', 'reason', 'reason-evidence-class', 'next-action', 'next-actor', 'safe-output-kind', 'waiting-on', 'waiting-since', 'owner', 'consequence-tier', 'verification-state', 'outcome-state', 'started-at', 'ended-at', 'observed-at', 'evidence-link', 'repository-link', 'run-link'],
   'attention-signals': ['attention-signal-id', 'signal-type', 'work-item-id', 'objective', 'scope', 'reason', 'action', 'expected-actor', 'age-seconds', 'consequence-tier', 'priority', 'observed-at', 'evidence-link', 'repository-link', 'run-link'],
   'agent-assignments': ['assignment-id', 'agent-id', 'agent-name', 'agent-icon', 'agent-description', 'permissions', 'agent-state', 'work-item-id', 'objective', 'assignment-state', 'handoff-state', 'dependency-state', 'conflict-state', 'run-count', 'total-runtime-seconds', 'last-observed-at', 'long-running', 'stale', 'observed-at', 'evidence-link', 'repository-link', 'run-link'],
   'agent-smells': ['smell-observation-id', 'smell-id', 'smell-name', 'smell-category', 'smell-severity', 'smell-summary', 'smell-evidence', 'smell-recommendation', 'organization', 'repository', 'workflow', 'run', 'observed-at', 'evidence-link', 'repository-link', 'workflow-link', 'run-link'],

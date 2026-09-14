@@ -67,6 +67,89 @@ const dashboardDocument = JSON.parse(readFileSync(`${process.cwd()}/dashboard.js
 const dashboardQueries = dashboardDocument.dashboard.queries;
 
 describe('declarative dashboard queries', () => {
+  it('counts the distinct repositories registered in the resolved control-plane scope', () => {
+    const repositories = [
+      ['github', 'gh-aw'],
+      ['github', 'gh-aw-firewall'],
+      ['github', 'gh-aw-mcpg'],
+      ['github', 'gh-aw-actions'],
+      ['github', 'gh-aw-threat-detection'],
+      ['githubnext', 'gh-aw-cao'],
+      ['githubnext', 'gh-aw-cao']
+    ].map(([organization, repository]) => ({ organization, repository }));
+
+    const result = executeDashboardQueries(
+      dashboardQueries,
+      { repositories: { source: 'repositories', rows: repositories, metadata: metadata('repositories') } },
+      ['overview-registered-repository-summary']
+    );
+
+    expect(result['overview-registered-repository-summary'].rows).toEqual([
+      { 'registered-repositories': 6 }
+    ]);
+  });
+
+  it('counts failed workflow dispatches separately from total dispatches', () => {
+    const result = executeDashboardQueries(
+      dashboardQueries,
+      {
+        runs: {
+          source: 'runs',
+          rows: [
+            { run: '1', event: 'workflow_dispatch', 'run-conclusion': 'success' },
+            { run: '2', event: 'workflow_dispatch', 'run-conclusion': 'failure' },
+            { run: '3', event: 'workflow_dispatch', 'run-conclusion': 'timed-out' },
+            { run: '4', event: 'push', 'run-conclusion': 'failure' }
+          ],
+          metadata: metadata('runs')
+        }
+      },
+      ['overview-dispatch-summary']
+    );
+
+    expect(result['overview-dispatch-summary'].rows).toEqual([
+      { dispatches: 3, 'failed-dispatches': 2 }
+    ]);
+  });
+
+  it('counts distinct targets from successful worker dispatches only', () => {
+    const runRows = [
+      { organization: 'githubnext', repository: 'gh-aw-cao', workflow: 'worker.md', run: '1', event: 'workflow_dispatch', 'run-conclusion': 'success', 'target-repository': 'github/gh-aw' },
+      { organization: 'githubnext', repository: 'gh-aw-cao', workflow: 'worker.md', run: '2', event: 'workflow_dispatch', 'run-conclusion': 'success', 'target-repository': 'github/gh-aw' },
+      { organization: 'githubnext', repository: 'gh-aw-cao', workflow: 'worker.md', run: '3', event: 'workflow_dispatch', 'run-conclusion': 'success', 'target-repository': 'github/gh-aw-firewall' },
+      { organization: 'githubnext', repository: 'gh-aw-cao', workflow: 'worker.md', run: '4', event: 'workflow_dispatch', 'run-conclusion': 'failure', 'target-repository': 'github/failed' },
+      { organization: 'githubnext', repository: 'gh-aw-cao', workflow: 'orchestrator.md', run: '5', event: 'workflow_dispatch', 'run-conclusion': 'success', 'target-repository': 'github/orchestrated' },
+      { organization: 'githubnext', repository: 'gh-aw-cao', workflow: 'worker.md', run: '6', event: 'push', 'run-conclusion': 'success', 'target-repository': 'github/pushed' },
+      { organization: 'githubnext', repository: 'gh-aw-cao', workflow: 'worker.md', run: '7', event: 'workflow_dispatch', 'run-conclusion': 'success' },
+      { organization: 'githubnext', repository: 'gh-aw-cao', workflow: 'worker.md', run: '8', event: 'workflow_dispatch', 'run-conclusion': 'success', 'target-repository': 'outside/not-registered' }
+    ];
+    const workflowRows = [
+      { organization: 'githubnext', repository: 'gh-aw-cao', workflow: 'worker.md', 'workflow-role': 'worker' },
+      { organization: 'githubnext', repository: 'gh-aw-cao', workflow: 'orchestrator.md', 'workflow-role': 'orchestrator' }
+    ];
+
+    const result = executeDashboardQueries(
+      dashboardQueries,
+      {
+        runs: { source: 'runs', rows: runRows, metadata: metadata('runs') },
+        workflows: { source: 'workflows', rows: workflowRows, metadata: metadata('workflows') },
+        repositories: {
+          source: 'repositories',
+          rows: [
+            { 'repository-coordinate': 'github/gh-aw' },
+            { 'repository-coordinate': 'github/gh-aw-firewall' }
+          ],
+          metadata: metadata('repositories')
+        }
+      },
+      ['overview-delivery-summary']
+    );
+
+    expect(result['overview-delivery-summary'].rows).toEqual([
+      { 'delivered-repositories': 2 }
+    ]);
+  });
+
   it('counts database entities through the declared horizon queries', () => {
     const sources = {
       packages: {
@@ -771,6 +854,10 @@ describe('declarative dashboard queries', () => {
     expect(derived['package-inventory'].rows).toEqual([{
       package: 'aw-doctor',
       'package-name': 'AW Doctor',
+      'package-dashboard-link': {
+        'dashboard-href': '#page-package-insights?package=aw-doctor',
+        'dashboard-label': 'View AW Doctor package dashboard'
+      },
       workflows: 2,
       roles: 'orchestrator, worker',
       modes: 'review',
@@ -1703,6 +1790,29 @@ describe('computed field vocabulary', () => {
     expect(compute('if', [{ value: true }, { value: 'yes' }, { value: 'no' }])).toBe('yes');
   });
 
+  it('builds dashboard links while preserving external link metadata', () => {
+    expect(compute('dashboard-link', [
+      { field: 'link' },
+      { value: '#page-repository-detail?repository=octo%2Frepo' },
+      { value: 'View octo/repo repository dashboard' },
+      { value: 'octo/repo' }
+    ], {
+      link: { relation: 'repository', href: 'https://github.com/octo/repo', label: 'View octo/repo on GitHub' }
+    })).toEqual({
+      relation: 'repository',
+      href: 'https://github.com/octo/repo',
+      label: 'View octo/repo on GitHub',
+      'dashboard-href': '#page-repository-detail?repository=octo%2Frepo',
+      'dashboard-label': 'View octo/repo repository dashboard'
+    });
+    expect(compute('dashboard-link', [
+      { field: 'missing' },
+      { value: '#page-package-insights?package=' },
+      { value: 'View package dashboard' },
+      { value: '' }
+    ])).toBeNull();
+  });
+
   it('evaluates every numeric function and returns null for unusable inputs', () => {
     expect(compute('number', [{ value: '12' }])).toBe(12);
     expect(compute('sum', [{ value: 1 }, { value: 2 }, { value: 3 }])).toBe(6);
@@ -1731,6 +1841,13 @@ describe('computed field vocabulary', () => {
       { op: 'compute', values: [{ as: 'joined', function: 'concat', args: [{ field: 'a' }, { field: 'b' }] }] },
       { op: 'select', fields: [{ field: 'joined', as: 'value' }] }
     ])).toEqual([{ value: 'xy' }]);
+  });
+
+  it('returns structured distinct values for worker-owned facet controls', () => {
+    expect(tidy([{ state: 'Done' }, { state: 'Todo' }, { state: 'Done' }], [{
+      op: 'summarize',
+      values: [{ field: 'state', as: 'states', reducer: 'distinct-values' }]
+    }])).toEqual([{ states: ['Done', 'Todo'] }]);
   });
 
   it('executes declared queries through the data worker request handler', () => {

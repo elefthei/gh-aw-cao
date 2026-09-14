@@ -1,9 +1,9 @@
 import { tidy } from './data-operations.js';
 import { summarizeTableColumns } from './table-summary-data.js';
 import { clusterScatterPoints } from './scatter-clustering.js';
-import { deriveDataHealthSources } from './data-health.js';
 import { adaptDashboardSources } from './data/adapters/dashboard-sources.js';
 import {
+  cachedJsonlAdaptationContext,
   ingestCachedGhAwJsonl,
   ingestDashboardSources,
   isCachedGhAwJsonlCurrent,
@@ -11,14 +11,10 @@ import {
 } from './data/ingest/coordinator.js';
 import { normalize } from './data/normalize/index.js';
 import { queryCanonicalViewSources } from './data/queries/view-sources.js';
+import { compileDashboardViewPayloadQueries } from './data/queries/view-payload-compiler.js';
 import { BROWSER_RETENTION_WINDOWS_MS } from './data/storage/retention.js';
 import { DashboardQueryCancelledError, continuationRevision, executeDashboardQueries, paginateDashboardSources, resolveDashboardQuerySources } from './data/queries/declarative.js';
 import { loadDashboardSources } from './source-loader.js';
-import { deriveOverviewSources } from './overview-data.js';
-import { deriveRepositorySources } from './repository-data.js';
-import { deriveRuntimeSources } from './runtime-data.js';
-import { deriveWorkflowSources } from './workflow-data.js';
-import { deriveDashboardLinkSources } from './inferred-sources.js';
 
 /** @param {ReadableStream<Uint8Array>} body */
 async function* responseChunks(body) {
@@ -42,7 +38,7 @@ async function* responseChunks(body) {
 /** @type {{ logicalSources: Record<string, import('./presenter.js').LogicalSourceInput>, revision: number } | null} */
 let liveDashboard = null;
 /**
- * @typedef {{ sourceNames: string[], context: ReturnType<typeof dashboardContext>, requestContext: { githubUrlBase?: string, dashboardRepository?: string | null }, pagination: Record<string, { limit: number, continuationToken?: string }>, revision: number | null }} DashboardSubscription
+ * @typedef {{ sourceNames: string[], context: ReturnType<typeof dashboardContext>, requestContext: { githubUrlBase?: string, dashboardRepository?: string | null }, pagination: Record<string, { limit: number, continuationToken?: string }>, revision: number | null, pageId?: string, routeParameters?: Record<string, string>, queryContext?: { filters?: Record<string, string[]>, search?: { fields: string[], query: string }, orderBy?: Array<{ field: string, direction?: 'asc'|'desc' }>, timeWindow?: { start?: string, end?: string } } }} DashboardSubscription
  */
 /** @type {Map<string, DashboardSubscription>} */
 const dashboardSubscriptions = new Map();
@@ -70,11 +66,15 @@ let nextIngestionProgressId = 0;
  */
 export function startIngestionProgress(target = self) {
   const id = `ingestion-progress-${++nextIngestionProgressId}`;
-  let message = 'Reading source data... 0 records read.';
-  const report = () => publishWorkerNotification({ id, message, tone: 'info', duration: 0 }, target);
+  let message = 'Preparing source data...';
+  let completed = false;
+  const report = () => {
+    if (!completed) publishWorkerNotification({ id, message, tone: 'info', duration: 0 }, target);
+  };
   /** @type {ReturnType<typeof setInterval> | undefined} */
   let interval;
   const delay = setTimeout(() => {
+    if (completed) return;
     report();
     interval = setInterval(report, INGESTION_PROGRESS_INTERVAL_MS);
   }, INGESTION_PROGRESS_DELAY_MS);
@@ -92,6 +92,8 @@ export function startIngestionProgress(target = self) {
       message = `Storing data... ${storedRecords} of ${totalRecords} records stored.`;
     },
     complete() {
+      if (completed) return;
+      completed = true;
       clearTimeout(delay);
       if (interval) clearInterval(interval);
       publishWorkerNotification({ id, dismiss: true }, target);
@@ -133,9 +135,22 @@ function pageScopedSources(sources, requested) {
  * @param {{ githubUrlBase?: string, dashboardRepository?: string | null }} requestContext
  * @param {{ aborted?: boolean }} [signal]
  * @param {Record<string, { limit: number, continuationToken?: string }>} [pagination]
+ * @param {string} [pageId]
+ * @param {Record<string, string>} [routeParameters]
+ * @param {{ filters?: Record<string, string[]>, timeWindow?: { start?: string, end?: string } }} [queryContext]
  * @param {typeof liveDashboard} [dashboard]
  */
-async function queryLiveDashboard(requested, context, requestContext, signal, pagination = {}, dashboard = liveDashboard) {
+async function queryLiveDashboard(
+  requested,
+  context,
+  requestContext,
+  signal,
+  pagination = {},
+  pageId,
+  routeParameters,
+  queryContext,
+  dashboard = liveDashboard
+) {
   dashboard ??= await loadActiveDashboard();
   const required = resolveDashboardQuerySources(context.queries, requested);
   const canonicalPayload = await queryCanonicalViewSources(
@@ -143,37 +158,51 @@ async function queryLiveDashboard(requested, context, requestContext, signal, pa
     dashboard.logicalSources,
     required
   );
-  const hasPublishedSources = Object.keys(dashboard.logicalSources).length > 0;
-  if (!hasPublishedSources) {
-    const querySources = {
-      ...canonicalPayload,
-      ...executeDashboardQueries(context.queries, canonicalPayload, requested, { signal })
-    };
-    return paginateDashboardSources(
-      deriveDashboardLinkSources(pageScopedSources(querySources, requested), context),
-      /** @type {Record<string, { limit: number, continuationToken?: string }>} */ (pagination ?? {}),
-      continuationRevision(context.queries, dashboard.revision)
-    );
-  }
-  const derivedSources = deriveRuntimeSources(
-    deriveRepositorySources(
-      deriveOverviewSources(
-        deriveWorkflowSources({ ...dashboard.logicalSources, ...canonicalPayload })
-      )
-    )
-  );
-  const healthSources = [...requested].some((name) => name.startsWith('data-health-'))
-    ? { ...derivedSources, ...deriveDataHealthSources(derivedSources) }
-    : derivedSources;
+  const page = pageId
+    ? context.pages.find((candidate) => candidate?.id === pageId)
+    : null;
+  const viewPayload = page && pageId
+    ? compileDashboardViewPayloadQueries(page, pageId, {
+        routeParameters,
+        queryContext,
+        evaluatedAt: queryContext?.timeWindow?.end ?? latestCanonicalInstant(canonicalPayload),
+        queries: context.queries
+      })
+    : { aliases: [], queries: [], replacedSources: [] };
+  const replacedSources = new Set(viewPayload.replacedSources);
+  const directRequests = new Set([...requested].filter((name) => !replacedSources.has(name)));
   const querySources = {
-    ...healthSources,
-    ...executeDashboardQueries(context.queries, healthSources, requested, { signal })
+    ...canonicalPayload,
+    ...executeDashboardQueries(context.queries, canonicalPayload, directRequests, { signal })
   };
+  const viewAliases = viewPayload.queries.length > 0
+    ? executeDashboardQueries(viewPayload.queries, querySources, viewPayload.aliases, { signal, pagination })
+    : {};
+  const selected = pageScopedSources(querySources, requested);
+  const responseSources = { ...selected, ...viewAliases };
   return paginateDashboardSources(
-    deriveDashboardLinkSources(pageScopedSources(querySources, requested), context),
+    responseSources,
     /** @type {Record<string, { limit: number, continuationToken?: string }>} */ (pagination ?? {}),
     continuationRevision(context.queries, dashboard.revision)
   );
+}
+
+/** @param {Record<string, import('./presenter.js').LogicalSourceInput>} sources */
+function latestCanonicalInstant(sources) {
+  let latest = Number.NEGATIVE_INFINITY;
+  for (const source of Object.values(sources)) {
+    for (const value of [source.metadata?.['as-of'], source.metadata?.['retrieved-at']]) {
+      const timestamp = Date.parse(String(value ?? ''));
+      if (Number.isFinite(timestamp)) latest = Math.max(latest, timestamp);
+    }
+    for (const row of source.rows ?? []) {
+      for (const field of ['observed-at', 'started-at', 'ended-at']) {
+        const timestamp = Date.parse(String(row[field] ?? ''));
+        if (Number.isFinite(timestamp)) latest = Math.max(latest, timestamp);
+      }
+    }
+  }
+  return Number.isFinite(latest) ? new Date(latest).toISOString() : undefined;
 }
 
 /** @param {Iterable<string>} [ids] */
@@ -214,6 +243,9 @@ async function flushDashboardSubscriptions() {
             subscription.requestContext,
             undefined,
             pagination,
+            subscription.pageId,
+            subscription.routeParameters,
+            subscription.queryContext,
             dashboard
           );
           if (dashboardSubscriptions.get(id) === subscription && liveDashboard === dashboard) {
@@ -262,7 +294,7 @@ function dashboardContext(value) {
   return {
     githubUrlBase: typeof context.githubUrlBase === 'string' && context.githubUrlBase
       ? context.githubUrlBase : 'https://github.com',
-    pages: /** @type {import('./inferred-sources.js').DashboardPage[]} */ (context.pages),
+    pages: /** @type {Array<{ id: string, kind: 'built-in' | 'custom', route?: { ['hash-query-parameter']?: string } }>} */ (context.pages),
     queries: /** @type {unknown[]} */ (context.queries ?? [])
   };
 }
@@ -278,7 +310,7 @@ function publishedPayloadIdentity(hashes, fileName) {
 }
 
 /**
- * @param {{ operation?: unknown, data?: unknown, operators?: unknown, columns?: unknown, limit?: unknown, sources?: unknown, queries?: unknown, context?: unknown, sourceUrl?: unknown, sourceNames?: unknown, pagination?: unknown, reportActivation?: unknown, emitCurrent?: unknown }} request
+ * @param {{ operation?: unknown, data?: unknown, operators?: unknown, columns?: unknown, limit?: unknown, sources?: unknown, queries?: unknown, context?: unknown, sourceUrl?: unknown, sourceNames?: unknown, pagination?: unknown, reportActivation?: unknown, emitCurrent?: unknown, pageId?: unknown, routeParameters?: unknown, queryContext?: unknown }} request
  * @param {{ aborted?: boolean }} [signal] cancels declarative query execution
  * @returns {unknown}
  */
@@ -291,7 +323,10 @@ export function processDataRequest(request, signal) {
       context,
       /** @type {{ githubUrlBase?: string, dashboardRepository?: string | null }} */ (request.context ?? {}),
       signal,
-      /** @type {Record<string, { limit: number, continuationToken?: string }>} */ (request.pagination ?? {})
+      /** @type {Record<string, { limit: number, continuationToken?: string }>} */ (request.pagination ?? {}),
+      typeof request.pageId === 'string' ? request.pageId : undefined,
+      routeParameters(request.routeParameters),
+      queryContext(request.queryContext)
     );
   }
   if (request?.operation === 'load-canonical-dashboard') {
@@ -353,8 +388,8 @@ export function processDataRequest(request, signal) {
           const collectionContext = request.context && typeof request.context === 'object'
             ? /** @type {Record<string, unknown>} */ (request.context).collectionContext
             : undefined;
-          const adaptationContext = JSON.stringify({
-            context: collectionContext ?? null,
+          const adaptationContext = cachedJsonlAdaptationContext({
+            context: collectionContext,
             workflowHints
           });
           const current = await readCurrentIngestion(indexedDB, 'ingest-jsonl', sourceUrl.href);
@@ -424,12 +459,16 @@ export function processDataRequest(request, signal) {
           revision: (liveDashboard?.revision ?? 0) + 1
         };
         scheduleDashboardSubscriptions();
+        progress.complete();
         const projected = await queryLiveDashboard(
           requested,
           context,
           /** @type {{ githubUrlBase?: string, dashboardRepository?: string | null }} */ (request.context ?? {}),
           signal,
-          /** @type {Record<string, { limit: number, continuationToken?: string }>} */ (request.pagination ?? {})
+          /** @type {Record<string, { limit: number, continuationToken?: string }>} */ (request.pagination ?? {}),
+          typeof request.pageId === 'string' ? request.pageId : undefined,
+          routeParameters(request.routeParameters),
+          queryContext(request.queryContext)
         );
         return request.reportActivation
           ? { sources: projected, changed }
@@ -446,15 +485,19 @@ export function processDataRequest(request, signal) {
     if (!Array.isArray(request.queries)) {
       throw new TypeError('Dashboard query requests require a queries array.');
     }
-    return executeDashboardQueries(
+    const requested = request.sourceNames === undefined
+      ? undefined
+      : requestedSourceNames(request.sourceNames);
+    const querySources = executeDashboardQueries(
       request.queries,
       /** @type {Record<string, import('./presenter.js').LogicalSourceInput>} */ (request.sources),
-      undefined,
+      requested,
       {
         signal,
         pagination: /** @type {Record<string, { limit: number, continuationToken?: string }>} */ (request.pagination ?? {})
       }
     );
+    return querySources;
   }
   if (request?.operation === 'summarize-table-columns') {
     if (!Array.isArray(request.columns)) {
@@ -513,6 +556,9 @@ if (typeof document === 'undefined' && typeof self !== 'undefined' && 'postMessa
         context,
         requestContext: /** @type {{ githubUrlBase?: string, dashboardRepository?: string | null }} */ (event.data.context ?? {}),
         pagination: /** @type {Record<string, { limit: number, continuationToken?: string }>} */ (event.data.pagination ?? {}),
+        pageId: typeof event.data.pageId === 'string' ? event.data.pageId : undefined,
+        routeParameters: routeParameters(event.data.routeParameters),
+        queryContext: queryContext(event.data.queryContext),
         revision: liveDashboard?.revision ?? null
       });
       if (liveDashboard && event.data.emitCurrent !== false) {
@@ -554,4 +600,59 @@ if (typeof document === 'undefined' && typeof self !== 'undefined' && 'postMessa
       settle(failure(error));
     }
   });
+}
+
+/** @param {unknown} value */
+function routeParameters(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  return Object.fromEntries(Object.entries(value)
+    .filter(([, item]) => typeof item === 'string')
+    .map(([key, item]) => [key, String(item)]));
+}
+
+/** @param {unknown} value */
+function queryContext(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const context = /** @type {{ filters?: unknown, search?: unknown, orderBy?: unknown, timeWindow?: unknown }} */ (value);
+  const filters = context.filters && typeof context.filters === 'object' && !Array.isArray(context.filters)
+    ? Object.fromEntries(Object.entries(context.filters)
+      .map(([field, candidates]) => [field, Array.isArray(candidates)
+        ? candidates.filter((item) => typeof item === 'string').map(String)
+        : []])
+      .filter(([, candidates]) => candidates.length > 0))
+    : undefined;
+  const rawSearch = context.search && typeof context.search === 'object' && !Array.isArray(context.search)
+    ? /** @type {Record<string, unknown>} */ (context.search)
+    : null;
+  const searchFields = rawSearch && Array.isArray(rawSearch.fields)
+    ? rawSearch.fields.filter((field) => typeof field === 'string' && field.trim()).map(String)
+    : [];
+  const searchQuery = rawSearch && typeof rawSearch.query === 'string' ? rawSearch.query.trim() : '';
+  const search = searchQuery && searchFields.length > 0 ? { fields: searchFields, query: searchQuery } : undefined;
+  const orderBy = Array.isArray(context.orderBy)
+    ? context.orderBy.flatMap((ordering) => {
+        if (!ordering || typeof ordering !== 'object' || Array.isArray(ordering)) return [];
+        const candidate = /** @type {Record<string, unknown>} */ (ordering);
+        if (typeof candidate.field !== 'string' || !candidate.field.trim()) return [];
+        const direction = candidate.direction === 'asc' || candidate.direction === 'desc'
+          ? /** @type {'asc'|'desc'} */ (candidate.direction)
+          : undefined;
+        return [{ field: candidate.field, ...(direction ? { direction } : {}) }];
+      })
+    : [];
+  const rawTimeWindow = context.timeWindow && typeof context.timeWindow === 'object' && !Array.isArray(context.timeWindow)
+    ? /** @type {Record<string, unknown>} */ (context.timeWindow)
+    : null;
+  const timeWindow = rawTimeWindow
+    ? {
+        start: typeof rawTimeWindow.start === 'string' ? rawTimeWindow.start : undefined,
+        end: typeof rawTimeWindow.end === 'string' ? rawTimeWindow.end : undefined
+      }
+    : undefined;
+  return {
+    ...(filters ? { filters } : {}),
+    ...(search ? { search } : {}),
+    ...(orderBy.length > 0 ? { orderBy } : {}),
+    ...(timeWindow?.start || timeWindow?.end ? { timeWindow } : {})
+  };
 }

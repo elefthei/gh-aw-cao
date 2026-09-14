@@ -298,6 +298,159 @@
         ]
       },
       {
+        "name": "overview-outcome-summary",
+        "intent": "Summarize distinct retained issue and pull request outputs and their delivered repositories.",
+        "from": "outcomes",
+        "compute": [
+          { "as": "category-useful", "function": "equals-any", "args": [{ "field": "outcome-category" }, { "value": "issue" }, { "value": "pull-request" }] },
+          { "as": "kind-useful", "function": "equals-any", "args": [{ "field": "safe-output-kind" }, { "value": "create-issue" }, { "value": "create-pull-request" }] },
+          { "as": "category-score", "function": "if", "args": [{ "field": "category-useful" }, { "value": 1 }, { "value": 0 }] },
+          { "as": "kind-score", "function": "if", "args": [{ "field": "kind-useful" }, { "value": 1 }, { "value": 0 }] },
+          { "as": "useful-score", "function": "sum", "args": [{ "field": "category-score" }, { "field": "kind-score" }] },
+          { "as": "useful", "function": "greater-than", "args": [{ "field": "useful-score" }, { "value": 0 }] },
+          { "as": "useful-output", "function": "if", "args": [{ "field": "useful" }, { "field": "safe-output" }, { "value": "" }] },
+          { "as": "delivered", "function": "equals-any", "args": [{ "field": "outcome-state" }, { "value": "accepted" }, { "value": "completed" }, { "value": "lifecycle-close" }] },
+          { "as": "delivered-repository", "function": "if", "args": [{ "field": "delivered" }, { "field": "repository" }, { "value": "" }] }
+        ],
+        "aggregate": {
+          "values": [
+            { "field": "useful-output", "as": "useful-outputs", "reducer": "distinct-count" },
+            { "field": "delivered-repository", "as": "delivered-repositories", "reducer": "distinct-count" }
+          ]
+        }
+      },
+      {
+        "name": "overview-run-summary",
+        "intent": "Summarize successful, failed, and active runs with rollout-mode counts.",
+        "from": "runs",
+        "joins": [
+          {
+            "source": "workflows",
+            "type": "left",
+            "on": [
+              { "left": "organization", "right": "organization" },
+              { "left": "repository", "right": "repository" },
+              { "left": "workflow", "right": "workflow" }
+            ],
+            "fields": [{ "field": "package", "as": "declared-package" }]
+          }
+        ],
+        "compute": [
+          { "as": "successful", "function": "equals-any", "args": [{ "field": "run-conclusion" }, { "value": "success" }] },
+          { "as": "failed", "function": "equals-any", "args": [{ "field": "run-conclusion" }, { "value": "failure" }, { "value": "startup-failure" }, { "value": "stale" }, { "value": "timed-out" }] },
+          { "as": "active", "function": "equals-any", "args": [{ "field": "run-status" }, { "value": "queued" }, { "value": "in-progress" }, { "value": "in_progress" }] },
+          { "as": "live-mode", "function": "equals-any", "args": [{ "field": "rollout-mode" }, { "value": "live" }] },
+          { "as": "review-mode", "function": "equals-any", "args": [{ "field": "rollout-mode" }, { "value": "review" }] },
+          { "as": "successful-count", "function": "if", "args": [{ "field": "successful" }, { "value": 1 }, { "value": 0 }] },
+          { "as": "failed-count", "function": "if", "args": [{ "field": "failed" }, { "value": 1 }, { "value": 0 }] },
+          { "as": "active-count", "function": "if", "args": [{ "field": "active" }, { "value": 1 }, { "value": 0 }] },
+          { "as": "active-live", "function": "if", "args": [{ "field": "live-mode" }, { "field": "active-count" }, { "value": 0 }] },
+          { "as": "active-review", "function": "if", "args": [{ "field": "review-mode" }, { "field": "active-count" }, { "value": 0 }] }
+        ],
+        "aggregate": {
+          "values": [
+            { "field": "successful-count", "as": "successful-runs", "reducer": "sum" },
+            { "field": "failed-count", "as": "failed-runs", "reducer": "sum" },
+            { "field": "active-count", "as": "active-runs", "reducer": "sum" },
+            { "field": "active-live", "as": "active-live", "reducer": "sum" },
+            { "field": "active-review", "as": "active-review", "reducer": "sum" }
+          ]
+        }
+      },
+      {
+        "name": "overview-dispatch-summary",
+        "intent": "Count workflow dispatch runs and failures in the selected horizon.",
+        "from": "runs",
+        "filter": { "predicates": [{ "field": "event", "equals": "workflow_dispatch" }] },
+        "compute": [
+          { "as": "failed", "function": "equals-any", "args": [{ "field": "run-conclusion" }, { "value": "failure" }, { "value": "startup-failure" }, { "value": "stale" }, { "value": "timed-out" }] },
+          { "as": "failed-count", "function": "if", "args": [{ "field": "failed" }, { "value": 1 }, { "value": 0 }] }
+        ],
+        "aggregate": {
+          "values": [
+            { "field": "run", "as": "dispatches", "reducer": "count" },
+            { "field": "failed-count", "as": "failed-dispatches", "reducer": "sum" }
+          ]
+        }
+      },
+      {
+        "name": "overview-delivery-summary",
+        "intent": "Count distinct target repositories with successful worker dispatch runs in the selected horizon.",
+        "from": "runs",
+        "joins": [
+          {
+            "source": "workflows",
+            "type": "left",
+            "on": [
+              { "left": "organization", "right": "organization" },
+              { "left": "repository", "right": "repository" },
+              { "left": "workflow", "right": "workflow" }
+            ],
+            "fields": [{ "field": "workflow-role", "as": "workflow-role" }]
+          },
+          {
+            "source": "repositories",
+            "type": "inner",
+            "on": [{ "left": "target-repository", "right": "repository-coordinate" }],
+            "fields": [{ "field": "repository-coordinate", "as": "registered-target-repository" }]
+          }
+        ],
+        "filter": {
+          "predicates": [
+            { "field": "event", "equals": "workflow_dispatch" },
+            { "field": "run-conclusion", "equals": "success" },
+            { "field": "workflow-role", "equals": "worker" }
+          ]
+        },
+        "aggregate": { "values": [{ "field": "target-repository", "as": "delivered-repositories", "reducer": "distinct-count" }] }
+      },
+      {
+        "name": "overview-value-summary",
+        "intent": "Count grader observations whose value exceeds their declared threshold.",
+        "from": "grader-observations",
+        "compute": [
+          { "as": "above-threshold", "function": "greater-than", "args": [{ "field": "value" }, { "field": "threshold" }] },
+          { "as": "value-gain", "function": "if", "args": [{ "field": "above-threshold" }, { "value": 1 }, { "value": 0 }] }
+        ],
+        "aggregate": { "values": [{ "field": "value-gain", "as": "value-gains", "reducer": "sum" }] }
+      },
+      {
+        "name": "overview-registered-repository-summary",
+        "intent": "Count the distinct target repositories registered in the resolved control-plane scope.",
+        "from": "repositories",
+        "compute": [
+          { "as": "registered-repository", "function": "concat", "args": [{ "field": "organization" }, { "value": "/" }, { "field": "repository" }] }
+        ],
+        "aggregate": { "values": [{ "field": "registered-repository", "as": "registered-repositories", "reducer": "distinct-count" }] }
+      },
+      {
+        "name": "overview-worker-summary",
+        "intent": "Count declared package worker workflows.",
+        "from": "workflows",
+        "filter": { "predicates": [{ "field": "workflow-role", "equals": "worker" }] },
+        "aggregate": { "values": [{ "field": "workflow", "as": "workers", "reducer": "count" }] }
+      },
+      {
+        "name": "overview-rhythm",
+        "intent": "Show current-week successful runs from Monday through today and the matching previous-week count for weekdays not yet reached.",
+        "from": "runs",
+        "time": { "range": "15d" },
+        "compute": [
+          {
+            "as": "rhythm-point",
+            "function": "calendar-week-point",
+            "args": [
+              { "field": "started-at" },
+              { "context": "time-end" },
+              { "field": "run-conclusion" }
+            ]
+          }
+        ],
+        "aggregate": {
+          "values": [{ "field": "rhythm-point", "as": "rhythm", "reducer": "calendar-week-rhythm" }]
+        }
+      },
+      {
         "name": "overview-failed-run-count",
         "intent": "Count failed workflow runs that need operator attention.",
         "from": "runs",
@@ -381,6 +534,158 @@
             }
           ]
         }
+      },
+      {
+        "name": "work-project-base",
+        "intent": "Normalize canonical delegated work into stable project fields for worker-owned filtering, grouping, and ordering.",
+        "from": "work-items",
+        "compute": [
+          { "as": "work-repository-coordinate", "function": "concat", "args": [{ "field": "organization" }, { "value": "/" }, { "field": "repository" }] },
+          { "as": "work-repository", "function": "coalesce", "args": [{ "field": "scope" }, { "field": "work-repository-coordinate" }, { "value": "Repository unavailable" }] },
+          { "as": "work-owner", "function": "coalesce", "args": [{ "field": "owner" }, { "field": "organization" }, { "value": "Unassigned" }] },
+          { "as": "work-type-normalized", "function": "coalesce", "args": [{ "field": "work-type" }, { "field": "workflow-role" }, { "value": "unknown" }] },
+          { "as": "work-managed-role", "function": "equals-any", "args": [{ "field": "work-type-normalized" }, { "value": "orchestrator" }, { "value": "worker" }] },
+          { "as": "work-package-fallback", "function": "if", "args": [{ "field": "work-managed-role" }, { "field": "work-owner" }, { "value": "" }] },
+          { "as": "work-package", "function": "coalesce", "args": [{ "field": "package" }, { "field": "package-name" }, { "field": "work-package-fallback" }, { "value": "" }] },
+          { "as": "work-id", "function": "coalesce", "args": [{ "field": "work-item-id" }, { "field": "workflow" }, { "field": "objective" }, { "value": "unknown-work" }] },
+          { "as": "work-name", "function": "coalesce", "args": [{ "field": "name" }, { "field": "workflow-name" }, { "field": "objective" }, { "value": "Unknown workflow" }] },
+          { "as": "work-icon", "function": "coalesce", "args": [{ "field": "workflow-icon" }, { "field": "package-icon" }, { "value": "workflow" }] },
+          { "as": "work-safe-output-kind", "function": "coalesce", "args": [{ "field": "safe-output-kind" }, { "value": "workflow-output" }] },
+          { "as": "work-started", "function": "coalesce", "args": [{ "field": "started-at" }, { "field": "observed-at" }] },
+          { "as": "work-stopped", "function": "coalesce", "args": [{ "field": "ended-at" }, { "value": "" }] },
+          { "as": "work-active-state", "function": "equals-any", "args": [{ "field": "lifecycle-state" }, { "value": "active" }, { "value": "in-progress" }, { "value": "in_progress" }, { "value": "running" }] },
+          { "as": "work-review-state", "function": "equals-any", "args": [{ "field": "lifecycle-state" }, { "value": "blocked" }, { "value": "review" }, { "value": "needs-review" }, { "value": "needs_review" }, { "value": "action-required" }] },
+          { "as": "work-done-state", "function": "equals-any", "args": [{ "field": "lifecycle-state" }, { "value": "completed" }, { "value": "cancelled" }, { "value": "success" }, { "value": "failure" }, { "value": "done" }] },
+          { "as": "work-done-or-todo", "function": "if", "args": [{ "field": "work-done-state" }, { "value": "done" }, { "value": "todo" }] },
+          { "as": "work-review-or-rest", "function": "if", "args": [{ "field": "work-review-state" }, { "value": "needs-review" }, { "field": "work-done-or-todo" }] },
+          { "as": "work-state", "function": "if", "args": [{ "field": "work-active-state" }, { "value": "in-progress" }, { "field": "work-review-or-rest" }] },
+          { "as": "work-state-label", "function": "title-case", "args": [{ "field": "work-state" }] },
+          { "as": "work-reviewer-actor", "function": "equals-any", "args": [{ "field": "lifecycle-state" }, { "value": "review" }, { "value": "needs-review" }, { "value": "needs_review" }, { "value": "completed" }, { "value": "cancelled" }, { "value": "success" }, { "value": "done" }] },
+          { "as": "work-maintainer-actor", "function": "equals-any", "args": [{ "field": "lifecycle-state" }, { "value": "blocked" }, { "value": "action-required" }, { "value": "failure" }] },
+          { "as": "work-maintainer-or-scheduler", "function": "if", "args": [{ "field": "work-maintainer-actor" }, { "value": "maintainer" }, { "value": "scheduler" }] },
+          { "as": "work-reviewer-or-rest", "function": "if", "args": [{ "field": "work-reviewer-actor" }, { "value": "reviewer" }, { "field": "work-maintainer-or-scheduler" }] },
+          { "as": "work-inferred-actor", "function": "if", "args": [{ "field": "work-active-state" }, { "value": "agent" }, { "field": "work-reviewer-or-rest" }] },
+          { "as": "work-actor", "function": "coalesce", "args": [{ "field": "next-actor" }, { "field": "work-inferred-actor" }] },
+          { "as": "work-search-base", "function": "concat", "args": [{ "field": "work-name" }, { "value": " " }, { "field": "work-repository" }, { "value": " " }, { "field": "work-owner" }, { "value": " " }, { "field": "work-package" }] },
+          { "as": "work-search", "function": "concat", "args": [{ "field": "work-search-base" }, { "value": " " }, { "field": "work-state-label" }] },
+          { "as": "work-facet-key", "function": "concat", "args": [{ "value": "work" }, { "value": "" }] }
+        ]
+      },
+      {
+        "name": "work-project-orchestrator-packages",
+        "intent": "Identify packages represented by orchestrator work in the current canonical Work inventory.",
+        "from": "work-project-base",
+        "filter": { "predicates": [{ "field": "work-type-normalized", "equals": "orchestrator" }] },
+        "aggregate": {
+          "by": ["work-package"],
+          "values": [{ "field": "work-id", "as": "work-orchestrator-count", "reducer": "count" }]
+        }
+      },
+      {
+        "name": "work-project-worker-packages",
+        "intent": "Identify packages represented by worker work in the current canonical Work inventory.",
+        "from": "work-project-base",
+        "filter": { "predicates": [{ "field": "work-type-normalized", "equals": "worker" }] },
+        "aggregate": {
+          "by": ["work-package"],
+          "values": [{ "field": "work-id", "as": "work-worker-count", "reducer": "count" }]
+        }
+      },
+      {
+        "name": "work-project-facets",
+        "intent": "Produce structured Work filter options once in the data worker.",
+        "from": "work-project-base",
+        "aggregate": {
+          "by": ["work-facet-key"],
+          "values": [
+            { "field": "work-state-label", "as": "work-state-options", "reducer": "distinct-values" },
+            { "field": "work-repository", "as": "work-repository-options", "reducer": "distinct-values" },
+            { "field": "work-owner", "as": "work-owner-options", "reducer": "distinct-values" },
+            { "field": "work-package", "as": "work-package-options", "reducer": "distinct-values" },
+            { "field": "work-item-id", "as": "work-total-count", "reducer": "count" }
+          ]
+        }
+      },
+      {
+        "name": "work-project-items",
+        "intent": "Return project-ready delegated work with worker-owned facets for the active Work view.",
+        "from": "work-project-base",
+        "joins": [
+          {
+            "source": "work-project-facets",
+            "type": "left",
+            "on": [{ "left": "work-facet-key", "right": "work-facet-key" }],
+            "fields": [
+              { "field": "work-state-options", "as": "work-state-options" },
+              { "field": "work-repository-options", "as": "work-repository-options" },
+              { "field": "work-owner-options", "as": "work-owner-options" },
+              { "field": "work-package-options", "as": "work-package-options" },
+              { "field": "work-total-count", "as": "work-total-count" }
+            ]
+          },
+          {
+            "source": "work-project-orchestrator-packages",
+            "type": "left",
+            "on": [{ "left": "work-package", "right": "work-package" }],
+            "fields": [{ "field": "work-orchestrator-count", "as": "work-orchestrator-count" }]
+          },
+          {
+            "source": "work-project-worker-packages",
+            "type": "left",
+            "on": [{ "left": "work-package", "right": "work-package" }],
+            "fields": [{ "field": "work-worker-count", "as": "work-worker-count" }]
+          }
+        ],
+        "compute": [
+          { "as": "work-orchestrators", "function": "coalesce", "args": [{ "field": "work-orchestrator-count" }, { "value": 0 }] },
+          { "as": "work-workers", "function": "coalesce", "args": [{ "field": "work-worker-count" }, { "value": 0 }] },
+          { "as": "work-has-orchestrator", "function": "greater-than", "args": [{ "field": "work-orchestrators" }, { "value": 0 }] },
+          { "as": "work-has-worker", "function": "greater-than", "args": [{ "field": "work-workers" }, { "value": 0 }] },
+          { "as": "work-grouped", "function": "if", "args": [{ "field": "work-has-orchestrator" }, { "field": "work-has-worker" }, { "value": false }] },
+          { "as": "work-item-group-id", "function": "concat", "args": [{ "value": "item:" }, { "field": "work-id" }] },
+          { "as": "work-package-group-id", "function": "concat", "args": [{ "value": "package:" }, { "field": "work-package" }] },
+          { "as": "work-group-id", "function": "if", "args": [{ "field": "work-grouped" }, { "field": "work-package-group-id" }, { "field": "work-item-group-id" }] },
+          { "as": "work-group-label", "function": "if", "args": [{ "field": "work-grouped" }, { "field": "work-package" }, { "field": "work-name" }] },
+          { "as": "work-is-orchestrator", "function": "equals-any", "args": [{ "field": "work-type-normalized" }, { "value": "orchestrator" }] },
+          { "as": "work-is-worker", "function": "equals-any", "args": [{ "field": "work-type-normalized" }, { "value": "worker" }] },
+          { "as": "work-worker-order", "function": "if", "args": [{ "field": "work-is-worker" }, { "value": 1 }, { "value": 2 }] },
+          { "as": "work-role-order", "function": "if", "args": [{ "field": "work-is-orchestrator" }, { "value": 0 }, { "field": "work-worker-order" }] }
+        ],
+        "order-by": [{ "field": "started-at", "direction": "desc" }]
+      },
+      {
+        "name": "work-board-todo",
+        "intent": "Return Todo board cards in worker-computed package and role order.",
+        "from": "work-project-items",
+        "filter": { "predicates": [{ "field": "work-state", "equals": "todo" }] },
+        "order-by": [{ "field": "work-group-id", "direction": "asc" }, { "field": "work-role-order", "direction": "asc" }, { "field": "work-name", "direction": "asc" }]
+      },
+      {
+        "name": "work-board-in-progress",
+        "intent": "Return in-progress board cards in worker-computed package and role order.",
+        "from": "work-project-items",
+        "filter": { "predicates": [{ "field": "work-state", "equals": "in-progress" }] },
+        "order-by": [{ "field": "work-group-id", "direction": "asc" }, { "field": "work-role-order", "direction": "asc" }, { "field": "work-name", "direction": "asc" }]
+      },
+      {
+        "name": "work-board-needs-review",
+        "intent": "Return needs-review board cards in worker-computed package and role order.",
+        "from": "work-project-items",
+        "filter": { "predicates": [{ "field": "work-state", "equals": "needs-review" }] },
+        "order-by": [{ "field": "work-group-id", "direction": "asc" }, { "field": "work-role-order", "direction": "asc" }, { "field": "work-name", "direction": "asc" }]
+      },
+      {
+        "name": "work-board-done",
+        "intent": "Return Done board cards in worker-computed package and role order.",
+        "from": "work-project-items",
+        "filter": { "predicates": [{ "field": "work-state", "equals": "done" }] },
+        "order-by": [{ "field": "work-group-id", "direction": "asc" }, { "field": "work-role-order", "direction": "asc" }, { "field": "work-name", "direction": "asc" }]
+      },
+      {
+        "name": "work-roadmap-items",
+        "intent": "Return Work roadmap rows in ascending canonical start order.",
+        "from": "work-project-items",
+        "order-by": [{ "field": "work-started", "direction": "asc" }]
       },
       {
         "name": "experiments-table",
@@ -1478,6 +1783,86 @@
                 "value": 0
               }
             ]
+          },
+          {
+            "as": "encoded-package",
+            "function": "url-encode",
+            "args": [{ "field": "package" }]
+          },
+          {
+            "as": "package-dashboard-href",
+            "function": "concat",
+            "args": [{ "value": "#page-package-insights?package=" }, { "field": "encoded-package" }]
+          },
+          {
+            "as": "package-dashboard-label",
+            "function": "concat",
+            "args": [{ "value": "View " }, { "field": "package-display-name" }, { "value": " package dashboard" }]
+          },
+          {
+            "as": "package-dashboard-link",
+            "function": "dashboard-link",
+            "args": [
+              { "field": "repository-link" },
+              { "field": "package-dashboard-href" },
+              { "field": "package-dashboard-label" },
+              { "field": "package" }
+            ]
+          },
+          {
+            "as": "encoded-repository",
+            "function": "url-encode",
+            "args": [{ "field": "repository-slug" }]
+          },
+          {
+            "as": "repository-dashboard-href",
+            "function": "concat",
+            "args": [{ "value": "#page-repository-detail?repository=" }, { "field": "encoded-repository" }]
+          },
+          {
+            "as": "repository-dashboard-label",
+            "function": "concat",
+            "args": [{ "value": "View " }, { "field": "repository-slug" }, { "value": " repository dashboard" }]
+          },
+          {
+            "as": "repository-dashboard-link",
+            "function": "dashboard-link",
+            "args": [
+              { "field": "repository-link" },
+              { "field": "repository-dashboard-href" },
+              { "field": "repository-dashboard-label" },
+              { "field": "repository-slug" }
+            ]
+          },
+          {
+            "as": "workflow-identity",
+            "function": "concat",
+            "args": [{ "field": "repository-slug" }, { "value": ":" }, { "field": "workflow" }]
+          },
+          {
+            "as": "encoded-workflow",
+            "function": "url-encode",
+            "args": [{ "field": "workflow-identity" }]
+          },
+          {
+            "as": "workflow-dashboard-href",
+            "function": "concat",
+            "args": [{ "value": "#page-workflow-runtime?workflow=" }, { "field": "encoded-workflow" }]
+          },
+          {
+            "as": "workflow-dashboard-label",
+            "function": "concat",
+            "args": [{ "value": "View " }, { "field": "workflow-display-name" }, { "value": " workflow dashboard" }]
+          },
+          {
+            "as": "workflow-dashboard-link",
+            "function": "dashboard-link",
+            "args": [
+              { "field": "workflow-link" },
+              { "field": "workflow-dashboard-href" },
+              { "field": "workflow-dashboard-label" },
+              { "field": "workflow-identity" }
+            ]
           }
         ],
         "select": [
@@ -1523,10 +1908,16 @@
             "as": "runs"
           },
           {
-            "field": "repository-link"
+            "field": "package-dashboard-link",
+            "as": "package-link"
           },
           {
-            "field": "workflow-link"
+            "field": "repository-dashboard-link",
+            "as": "repository-link"
+          },
+          {
+            "field": "workflow-dashboard-link",
+            "as": "workflow-link"
           }
         ],
         "order-by": [
@@ -1538,6 +1929,680 @@
             "field": "workflow",
             "direction": "asc"
           }
+        ]
+      },
+      {
+        "name": "packaged-workflows",
+        "intent": "List package-owned orchestrator and worker workflows with database-backed execution totals.",
+        "description": "Package workflows projected from the canonical workflow inventory.",
+        "from": "workflow-inventory",
+        "filter": {
+          "predicates": [
+            {
+              "field": "workflow-role",
+              "in": [
+                "orchestrator",
+                "worker"
+              ]
+            }
+          ]
+        },
+        "select": [
+          { "field": "package" },
+          { "field": "package-name" },
+          { "field": "organization" },
+          { "field": "repository" },
+          { "field": "workflow" },
+          { "field": "workflow-name" },
+          { "field": "workflow-role" },
+          { "field": "rollout-mode" },
+          { "field": "workflow-active" },
+          { "field": "runs" },
+          { "field": "aic" },
+          { "field": "repository-link" },
+          { "field": "workflow-link" }
+        ],
+        "order-by": [
+          { "field": "package-name", "direction": "asc" },
+          { "field": "workflow-role", "direction": "asc" },
+          { "field": "workflow-name", "direction": "asc" }
+        ]
+      },
+      {
+        "name": "workflow-runs",
+        "intent": "Project canonical runs into route-addressable workflow run evidence.",
+        "description": "Workflow runs with a stable repository and workflow route key.",
+        "from": "runs",
+        "compute": [
+          {
+            "as": "repository-coordinate",
+            "function": "concat",
+            "args": [
+              { "field": "organization" },
+              { "value": "/" },
+              { "field": "repository" }
+            ]
+          },
+          {
+            "as": "workflow-route",
+            "function": "concat",
+            "args": [
+              { "field": "repository-coordinate" },
+              { "value": ":" },
+              { "field": "workflow" }
+            ]
+          }
+        ],
+        "select": [
+          { "field": "workflow-route" },
+          { "field": "organization" },
+          { "field": "repository" },
+          { "field": "workflow" },
+          { "field": "run" },
+          { "field": "run-title" },
+          { "field": "event" },
+          { "field": "started-at" },
+          { "field": "ended-at" },
+          { "field": "run-status" },
+          { "field": "run-conclusion" },
+          { "field": "failure-job" },
+          { "field": "failure-message" },
+          { "field": "failure-step" },
+          { "field": "rollout-mode" },
+          { "field": "engine" },
+          { "field": "engine-version" },
+          { "field": "gh-aw-version" },
+          { "field": "requested-model" },
+          { "field": "resolved-model" },
+          { "field": "run-link" }
+        ],
+        "order-by": [
+          { "field": "started-at", "direction": "desc" },
+          { "field": "run", "direction": "desc" }
+        ]
+      },
+      {
+        "name": "workflow-reports",
+        "intent": "Project retained outcomes into route-addressable workflow reports.",
+        "description": "Workflow outcome reports with stable route keys and disposition fields.",
+        "from": "outcomes",
+        "compute": [
+          {
+            "as": "report-repository",
+            "function": "coalesce",
+            "args": [
+              { "field": "runtime-repository" },
+              { "field": "repository" }
+            ]
+          },
+          {
+            "as": "workflow-route",
+            "function": "concat",
+            "args": [
+              { "field": "report-repository" },
+              { "value": ":" },
+              { "field": "workflow" }
+            ]
+          },
+          {
+            "as": "report-status",
+            "function": "coalesce",
+            "args": [
+              { "field": "outcome-status" },
+              { "field": "outcome-state" },
+              { "value": "unknown" }
+            ]
+          }
+        ],
+        "select": [
+          { "field": "workflow-route" },
+          { "field": "safe-output" },
+          { "field": "outcome-title" },
+          { "field": "outcome-summary" },
+          { "field": "report-status", "as": "outcome-status" },
+          { "field": "rollout-mode" },
+          { "field": "engine" },
+          { "field": "engine-version" },
+          { "field": "requested-model" },
+          { "field": "resolved-model" },
+          { "field": "outcome-category" },
+          { "field": "observed-at" },
+          { "field": "external-link" }
+        ],
+        "order-by": [
+          { "field": "observed-at", "direction": "desc" },
+          { "field": "outcome-title", "direction": "asc" }
+        ]
+      },
+      {
+        "name": "package-reports",
+        "intent": "Project retained outcomes into package-addressable report evidence.",
+        "description": "Package outcome reports with database-backed disposition fields.",
+        "from": "outcomes",
+        "compute": [
+          {
+            "as": "report-status",
+            "function": "coalesce",
+            "args": [
+              { "field": "outcome-status" },
+              { "field": "outcome-state" },
+              { "value": "unknown" }
+            ]
+          }
+        ],
+        "select": [
+          { "field": "package" },
+          { "field": "safe-output" },
+          { "field": "outcome-title" },
+          { "field": "outcome-summary" },
+          { "field": "report-status", "as": "outcome-status" },
+          { "field": "rollout-mode" },
+          { "field": "engine" },
+          { "field": "engine-version" },
+          { "field": "requested-model" },
+          { "field": "resolved-model" },
+          { "field": "outcome-category" },
+          { "field": "observed-at" },
+          { "field": "external-link" }
+        ],
+        "order-by": [
+          { "field": "observed-at", "direction": "desc" },
+          { "field": "outcome-title", "direction": "asc" }
+        ]
+      },
+      {
+        "name": "dispatches",
+        "intent": "Project workflow-dispatch runs with package attribution and retained failure evidence.",
+        "description": "Canonical workflow-dispatch runs joined to their declared workflow identity.",
+        "from": "runs",
+        "joins": [
+          {
+            "source": "workflows",
+            "type": "left",
+            "on": [
+              { "left": "organization", "right": "organization" },
+              { "left": "repository", "right": "repository" },
+              { "left": "workflow", "right": "workflow" }
+            ],
+            "fields": [
+              { "field": "package", "as": "declared-package" },
+              { "field": "package-name", "as": "declared-package-name" },
+              { "field": "workflow-name", "as": "declared-workflow-name" },
+              { "field": "workflow-role", "as": "declared-workflow-role" }
+            ]
+          }
+        ],
+        "filter": {
+          "predicates": [
+            { "field": "event", "equals": "workflow_dispatch" }
+          ]
+        },
+        "compute": [
+          {
+            "as": "status",
+            "function": "coalesce",
+            "args": [
+              { "field": "run-conclusion" },
+              { "field": "run-status" },
+              { "value": "unknown" }
+            ]
+          },
+          {
+            "as": "status-detail",
+            "function": "coalesce",
+            "args": [
+              { "field": "failure-detail" },
+              { "field": "failure-message" },
+              { "field": "failure-step" },
+              { "field": "admission-reason" },
+              { "value": "" }
+            ]
+          },
+          {
+            "as": "runtime-repository",
+            "function": "concat",
+            "args": [
+              { "field": "organization" },
+              { "value": "/" },
+              { "field": "repository" }
+            ]
+          },
+          {
+            "as": "is-worker",
+            "function": "equals-any",
+            "args": [
+              { "field": "declared-workflow-role" },
+              { "value": "worker" }
+            ]
+          },
+          {
+            "as": "is-orchestrator",
+            "function": "equals-any",
+            "args": [
+              { "field": "declared-workflow-role" },
+              { "value": "orchestrator" }
+            ]
+          },
+          {
+            "as": "root-dispatch-type",
+            "function": "if",
+            "args": [
+              { "field": "is-orchestrator" },
+              { "value": "Package orchestrator" },
+              { "value": "Standalone workflow" }
+            ]
+          },
+          {
+            "as": "dispatch-type",
+            "function": "if",
+            "args": [
+              { "field": "is-worker" },
+              { "value": "Package worker" },
+              { "field": "root-dispatch-type" }
+            ]
+          },
+          {
+            "as": "package-display-name",
+            "function": "coalesce",
+            "args": [{ "field": "declared-package-name" }, { "field": "declared-package" }]
+          },
+          {
+            "as": "workflow-display-name",
+            "function": "coalesce",
+            "args": [{ "field": "declared-workflow-name" }, { "field": "workflow" }]
+          },
+          {
+            "as": "encoded-package",
+            "function": "url-encode",
+            "args": [{ "field": "declared-package" }]
+          },
+          {
+            "as": "package-dashboard-href",
+            "function": "concat",
+            "args": [{ "value": "#page-package-insights?package=" }, { "field": "encoded-package" }]
+          },
+          {
+            "as": "package-dashboard-label",
+            "function": "concat",
+            "args": [{ "value": "View " }, { "field": "package-display-name" }, { "value": " package dashboard" }]
+          },
+          {
+            "as": "package-dashboard-link",
+            "function": "dashboard-link",
+            "args": [
+              { "field": "repository-link" },
+              { "field": "package-dashboard-href" },
+              { "field": "package-dashboard-label" },
+              { "field": "declared-package" }
+            ]
+          },
+          {
+            "as": "encoded-repository",
+            "function": "url-encode",
+            "args": [{ "field": "runtime-repository" }]
+          },
+          {
+            "as": "repository-dashboard-href",
+            "function": "concat",
+            "args": [{ "value": "#page-repository-detail?repository=" }, { "field": "encoded-repository" }]
+          },
+          {
+            "as": "repository-dashboard-label",
+            "function": "concat",
+            "args": [{ "value": "View " }, { "field": "runtime-repository" }, { "value": " repository dashboard" }]
+          },
+          {
+            "as": "repository-dashboard-link",
+            "function": "dashboard-link",
+            "args": [
+              { "field": "repository-link" },
+              { "field": "repository-dashboard-href" },
+              { "field": "repository-dashboard-label" },
+              { "field": "runtime-repository" }
+            ]
+          },
+          {
+            "as": "workflow-identity",
+            "function": "concat",
+            "args": [{ "field": "runtime-repository" }, { "value": ":" }, { "field": "workflow" }]
+          },
+          {
+            "as": "encoded-workflow",
+            "function": "url-encode",
+            "args": [{ "field": "workflow-identity" }]
+          },
+          {
+            "as": "workflow-dashboard-href",
+            "function": "concat",
+            "args": [{ "value": "#page-workflow-runtime?workflow=" }, { "field": "encoded-workflow" }]
+          },
+          {
+            "as": "workflow-dashboard-label",
+            "function": "concat",
+            "args": [{ "value": "View " }, { "field": "workflow-display-name" }, { "value": " workflow dashboard" }]
+          },
+          {
+            "as": "workflow-dashboard-link",
+            "function": "dashboard-link",
+            "args": [
+              { "field": "workflow-link" },
+              { "field": "workflow-dashboard-href" },
+              { "field": "workflow-dashboard-label" },
+              { "field": "workflow-identity" }
+            ]
+          }
+        ],
+        "select": [
+          { "field": "started-at" },
+          { "field": "dispatch-type" },
+          { "field": "declared-package", "as": "package" },
+          { "field": "declared-package-name", "as": "package-name" },
+          { "field": "declared-workflow-name", "as": "workflow-name" },
+          { "field": "run-title" },
+          { "field": "runtime-repository" },
+          { "field": "status" },
+          { "field": "status-detail" },
+          { "field": "resource-reset-at", "as": "status-detail-at" },
+          { "field": "organization" },
+          { "field": "repository" },
+          { "field": "workflow" },
+          { "field": "run-link" },
+          { "field": "package-dashboard-link", "as": "package-link" },
+          { "field": "repository-dashboard-link", "as": "repository-link" },
+          { "field": "workflow-dashboard-link", "as": "workflow-link" }
+        ],
+        "order-by": [
+          { "field": "started-at", "direction": "desc" }
+        ]
+      },
+      {
+        "name": "runtime-episodes",
+        "intent": "Project orchestrator runs as root-only runtime episodes from canonical run and workflow records.",
+        "description": "Root workflow episodes ordered by their observed start time.",
+        "from": "runs",
+        "joins": [
+          {
+            "source": "workflows",
+            "type": "inner",
+            "on": [
+              { "left": "organization", "right": "organization" },
+              { "left": "repository", "right": "repository" },
+              { "left": "workflow", "right": "workflow" }
+            ],
+            "fields": [
+              { "field": "package-name", "as": "episode-package" },
+              { "field": "workflow-name", "as": "episode-workflow" },
+              { "field": "workflow-role", "as": "episode-role" }
+            ]
+          }
+        ],
+        "filter": {
+          "predicates": [
+            { "field": "episode-role", "equals": "orchestrator" }
+          ]
+        },
+        "compute": [
+          {
+            "as": "episode-title",
+            "function": "coalesce",
+            "args": [
+              { "field": "run-title" },
+              { "field": "episode-workflow" },
+              { "field": "run" }
+            ]
+          },
+          {
+            "as": "episode-status",
+            "function": "coalesce",
+            "args": [
+              { "field": "run-conclusion" },
+              { "field": "run-status" },
+              { "value": "unknown" }
+            ]
+          },
+          {
+            "as": "control-transition",
+            "function": "coalesce",
+            "args": [
+              { "value": "workflow_dispatch → root run" },
+              { "value": "workflow_dispatch → root run" }
+            ]
+          },
+          {
+            "as": "attribution",
+            "function": "coalesce",
+            "args": [
+              { "value": "Root only" },
+              { "value": "Root only" }
+            ]
+          }
+        ],
+        "select": [
+          { "field": "run" },
+          { "field": "episode-title", "as": "run-title" },
+          { "field": "episode-package", "as": "package" },
+          { "field": "episode-workflow", "as": "workflow" },
+          { "field": "started-at" },
+          { "field": "duration" },
+          { "field": "episode-status", "as": "status" },
+          { "field": "control-transition" },
+          { "field": "attribution" },
+          { "field": "run-link" }
+        ],
+        "order-by": [
+          { "field": "started-at", "direction": "desc" }
+        ],
+        "limit": 12
+      },
+      {
+        "name": "readiness-observations",
+        "intent": "Summarize recent canonical run conclusions as release-readiness evidence.",
+        "description": "Run conclusion counts and latest observations for the readiness ledger.",
+        "from": "runs",
+        "compute": [
+          {
+            "as": "signal",
+            "function": "title-case",
+            "args": [
+              { "field": "run-conclusion" }
+            ]
+          },
+          {
+            "as": "status",
+            "function": "coalesce",
+            "args": [
+              { "field": "run-conclusion" },
+              { "value": "unknown" }
+            ]
+          },
+          {
+            "as": "detail",
+            "function": "coalesce",
+            "args": [
+              { "value": "Retained run evidence" },
+              { "value": "Retained run evidence" }
+            ]
+          }
+        ],
+        "aggregate": {
+          "by": [
+            "signal",
+            "status",
+            "detail"
+          ],
+          "values": [
+            { "field": "run", "as": "count", "reducer": "distinct-count" }
+          ]
+        },
+        "select": [
+          { "field": "signal" },
+          { "field": "count" },
+          { "field": "status" },
+          { "field": "detail" }
+        ],
+        "order-by": [
+          { "field": "count", "direction": "desc" },
+          { "field": "signal", "direction": "asc" }
+        ]
+      },
+      {
+        "name": "overview-attention-domains",
+        "intent": "Describe operational attention directly from canonical source availability, completeness, and freshness.",
+        "description": "Database-backed evidence domains ordered by the urgency of their retained collection state.",
+        "from": "source-metadata",
+        "filter": {
+          "predicates": [
+            {
+              "field": "source",
+              "in": [
+                "runs",
+                "workflows",
+                "outcomes",
+                "operational-values",
+                "usage",
+                "coverage-diagnostics"
+              ]
+            }
+          ]
+        },
+        "compute": [
+          {
+            "as": "domain",
+            "function": "title-case",
+            "args": [
+              { "field": "source" }
+            ]
+          },
+          {
+            "as": "is-unavailable",
+            "function": "equals-any",
+            "args": [
+              { "field": "availability" },
+              { "value": "unavailable" },
+              { "value": "unknown" },
+              { "value": "empty" }
+            ]
+          },
+          {
+            "as": "needs-investigation",
+            "function": "equals-any",
+            "args": [
+              { "field": "completeness" },
+              { "value": "partial" },
+              { "value": "unknown" }
+            ]
+          },
+          {
+            "as": "available-state",
+            "function": "if",
+            "args": [
+              { "field": "needs-investigation" },
+              { "value": "Investigate" },
+              { "value": "Monitor" }
+            ]
+          },
+          {
+            "as": "state",
+            "function": "if",
+            "args": [
+              { "field": "is-unavailable" },
+              { "value": "Unavailable" },
+              { "field": "available-state" }
+            ]
+          },
+          {
+            "as": "available-tone",
+            "function": "if",
+            "args": [
+              { "field": "needs-investigation" },
+              { "value": "investigate" },
+              { "value": "monitor" }
+            ]
+          },
+          {
+            "as": "tone",
+            "function": "if",
+            "args": [
+              { "field": "is-unavailable" },
+              { "value": "unavailable" },
+              { "field": "available-tone" }
+            ]
+          },
+          {
+            "as": "available-priority",
+            "function": "if",
+            "args": [
+              { "field": "needs-investigation" },
+              { "value": 1 },
+              { "value": 2 }
+            ]
+          },
+          {
+            "as": "priority",
+            "function": "if",
+            "args": [
+              { "field": "is-unavailable" },
+              { "value": 0 },
+              { "field": "available-priority" }
+            ]
+          },
+          {
+            "as": "value",
+            "function": "format-count",
+            "args": [
+              { "field": "row-count" }
+            ]
+          },
+          {
+            "as": "detail",
+            "function": "concat",
+            "args": [
+              { "value": "Availability: " },
+              { "field": "availability" },
+              { "value": " · completeness: " },
+              { "field": "completeness" },
+              { "value": " · freshness: " },
+              { "field": "freshness" }
+            ]
+          },
+          {
+            "as": "icon",
+            "function": "coalesce",
+            "args": [
+              { "value": "database" },
+              { "value": "database" }
+            ]
+          },
+          {
+            "as": "href",
+            "function": "coalesce",
+            "args": [
+              { "value": "#page-coverage" },
+              { "value": "#page-coverage" }
+            ]
+          },
+          {
+            "as": "order",
+            "function": "number",
+            "args": [
+              { "field": "row-count" }
+            ]
+          }
+        ],
+        "select": [
+          { "field": "domain" },
+          { "field": "state" },
+          { "field": "tone" },
+          { "field": "icon" },
+          { "field": "value" },
+          { "field": "detail" },
+          { "field": "href" },
+          { "field": "priority" },
+          { "field": "order" }
+        ],
+        "order-by": [
+          { "field": "priority", "direction": "asc" },
+          { "field": "domain", "direction": "asc" }
         ]
       },
       {
@@ -2341,6 +3406,60 @@
                 "value": 0
               }
             ]
+          },
+          {
+            "as": "encoded-package",
+            "function": "url-encode",
+            "args": [
+              {
+                "field": "package"
+              }
+            ]
+          },
+          {
+            "as": "package-dashboard-href",
+            "function": "concat",
+            "args": [
+              {
+                "value": "#page-package-insights?package="
+              },
+              {
+                "field": "encoded-package"
+              }
+            ]
+          },
+          {
+            "as": "package-dashboard-label",
+            "function": "concat",
+            "args": [
+              {
+                "value": "View "
+              },
+              {
+                "field": "package-name"
+              },
+              {
+                "value": " package dashboard"
+              }
+            ]
+          },
+          {
+            "as": "package-dashboard-link",
+            "function": "dashboard-link",
+            "args": [
+              {
+                "value": ""
+              },
+              {
+                "field": "package-dashboard-href"
+              },
+              {
+                "field": "package-dashboard-label"
+              },
+              {
+                "field": "package"
+              }
+            ]
           }
         ],
         "select": [
@@ -2349,6 +3468,9 @@
           },
           {
             "field": "package-name"
+          },
+          {
+            "field": "package-dashboard-link"
           },
           {
             "field": "workflows"
@@ -2657,10 +3779,6 @@
             "mark": "table",
             "layout": "full-view",
             "encoding": {
-              "href": {
-                "field": "evidence-link",
-                "type": "nominal"
-              },
               "columns": [
                 {
                   "field": "signal",
@@ -2682,12 +3800,6 @@
                   "field": "detail",
                   "type": "nominal",
                   "title": "Evidence"
-                },
-                {
-                  "field": "latest-at",
-                  "type": "temporal",
-                  "format": "human-friendly-timestamp",
-                  "title": "Latest"
                 }
               ]
             },
@@ -3789,7 +4901,7 @@
               "empty-message": "No packages discovered.",
               "encoding": {
                 "href": {
-                  "field": "package-link",
+                  "field": "package-dashboard-link",
                   "type": "nominal"
                 },
                 "columns": [
@@ -3936,7 +5048,7 @@
             "empty-message": "No orchestrator or worker workflows are configured for this package.",
             "encoding": {
               "href": {
-                "field": "external-link",
+                "field": "workflow-link",
                 "type": "nominal"
               },
               "columns": [
@@ -6314,15 +7426,17 @@
           {
             "id": "overview-outcomes",
             "title": "How are we doing?",
+            "description": "Repositories delivered to counts distinct targets with retained completed delivery evidence in the selected horizon and compares them with the distinct registered target set.",
             "data": {
               "sources": [
-                "outcomes",
-                "runs",
-                "dispatches",
-                "factory-rhythm-baseline",
-                "grader-observations",
-                "repositories",
-                "workflows"
+                "overview-outcome-summary",
+                "overview-run-summary",
+                "overview-dispatch-summary",
+                "overview-delivery-summary",
+                "overview-value-summary",
+                "overview-registered-repository-summary",
+                "overview-worker-summary",
+                "overview-rhythm"
               ]
             },
             "mark": "element",
@@ -6330,16 +7444,16 @@
             "config": {
               "labels": {
                 "repositories": {
-                  "singular": "Repository",
-                  "plural": "Repositories"
+                  "singular": "Repository delivered to",
+                  "plural": "Repositories delivered to"
                 },
                 "successful-runs": {
                   "singular": "Successful run",
                   "plural": "Successful runs"
                 },
                 "dispatches": {
-                  "singular": "Dispatch",
-                  "plural": "Dispatches"
+                  "singular": "Successful dispatch",
+                  "plural": "Successful dispatches"
                 },
                 "value-gains": {
                   "singular": "Value gain",
@@ -6588,7 +7702,10 @@
             "description": "Delegated work grouped by its current lifecycle state.",
             "data": {
               "sources": [
-                "work-items"
+                "work-board-todo",
+                "work-board-in-progress",
+                "work-board-needs-review",
+                "work-board-done"
               ]
             },
             "mark": "element",
@@ -6618,7 +7735,7 @@
             "description": "A structured record list with owners, repositories, lifecycle state, and runtime windows.",
             "data": {
               "sources": [
-                "work-items"
+                "work-project-items"
               ]
             },
             "mark": "element",
@@ -6648,7 +7765,7 @@
             "description": "Start dates, durations, owners, and completion points aligned on one calendar.",
             "data": {
               "sources": [
-                "work-items"
+                "work-roadmap-items"
               ]
             },
             "mark": "element",

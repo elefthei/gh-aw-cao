@@ -24,10 +24,11 @@ import { tidy } from '../../data-operations.js';
  *   name: string,
  *   description?: string,
  *   from: string,
+ *   time?: { range?: string, start?: string, end?: string },
  *   joins?: Array<{ source: string, type?: 'inner'|'left', on: Array<{ left: string, right: string }>, fields: Array<{ field: string, as: string }> }>,
- *   filter?: { predicates?: Array<{ field: string, equals?: unknown, in?: unknown[], includes?: string }> },
+ *   filter?: { predicates?: Array<{ field: string, equals?: unknown, in?: unknown[], includes?: string, gte?: unknown, lt?: unknown, optional?: boolean }> },
  *   compute?: import('../../data-operations.js').ComputedField[],
- *   aggregate?: { by?: string[], values: Array<{ field: string, as: string, reducer: 'count'|'distinct-count'|'distinct-list'|'sum'|'mean'|'min'|'max' }> },
+ *   aggregate?: { by?: string[], values: Array<{ field: string, as: string, reducer: 'count'|'distinct-count'|'distinct-list'|'distinct-values'|'sum'|'mean'|'min'|'max' }> },
  *   select?: Array<{ field: string, as?: string }>,
  *   ['order-by']?: Array<{ field: string, direction?: 'asc'|'desc' }>,
  *   limit?: number
