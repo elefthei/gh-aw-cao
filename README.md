@@ -16,7 +16,7 @@ Central Agentic Ops packages reusable orchestrators and focused workers so platf
 
 ## Project status and scope
 
-Central Agentic Ops is an actively developed research prototype. It extends
+Central Agentic Ops extends
 [GitHub Agentic Workflows](https://github.github.com/gh-aw/) with a catalog of
 reusable operations and a central control plane for explicit repository fleets.
 It does not replace repository permissions, branch protections, or human review.
