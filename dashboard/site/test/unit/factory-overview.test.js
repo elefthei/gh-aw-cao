@@ -98,10 +98,10 @@ it('renders compact database summaries and distinct registered repository covera
 });
 
 it.each([
-  ['humming', { 'active-runs': 1 }, 'Your factory is humming.'],
+  ['humming with active runs', { 'active-runs': 1 }, 'Your factory is humming.'],
   ['under strain', { 'failed-runs': 2, 'successful-runs': 1 }, 'Your factory is under strain.'],
   ['needs attention', { 'failed-runs': 1, 'successful-runs': 1 }, 'Your factory needs attention.'],
-  ['completed its shift', { 'successful-runs': 1 }, 'Your factory completed its shift.'],
+  ['humming', { 'successful-runs': 1 }, 'Your factory is humming.'],
   ['idle', {}, 'Your factory is idle.']
 ])('describes a factory that is %s', (_state, values, expected) => {
   const rendered = renderFactoryOverview({
@@ -126,6 +126,23 @@ it('reports unavailable query evidence instead of inferring a factory state', ()
     })
   });
   expect(rendered.querySelector('h2')?.textContent).toBe('Your factory status is unavailable.');
+});
+
+it('retains run status when optional outcome evidence is unavailable', () => {
+  const rendered = renderFactoryOverview({
+    sources: overviewSources({
+      'overview-outcome-summary': source('overview-outcome-summary', [], { availability: 'unavailable' }),
+      'overview-run-summary': source('overview-run-summary', [{
+        'successful-runs': 1,
+        'failed-runs': 0,
+        'active-runs': 0,
+        'active-live': 0,
+        'active-review': 0
+      }])
+    })
+  });
+
+  expect(rendered.querySelector('h2')?.textContent).toBe('Your factory is humming.');
 });
 
 it('hides the duplicate run and dispatch summary when no useful outputs exist', () => {
