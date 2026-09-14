@@ -1,20 +1,25 @@
 #!/usr/bin/env node
 
+import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream, realpathSync } from 'node:fs';
-import { readFile, readdir, mkdir, mkdtemp, rename, rm, stat } from 'node:fs/promises';
+import { readFile, readdir, mkdir, mkdtemp, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
-import { adaptCachedGhAwJsonlStream } from '../dashboard/site/src/data/adapters/gh-aw-logs.js';
-import { ingestCachedGhAwJsonl, ingestGhAwLogs } from '../dashboard/site/src/data/ingest/coordinator.js';
+import { createDebug } from './debug.mjs';
+import { adaptCachedGhAwJsonlStream, cachedJsonlPayloadIdentity } from '../dashboard/site/src/data/adapters/gh-aw-logs.js';
+import { ingestCachedGhAwJsonl, ingestGhAwLogs, isCachedGhAwJsonlCurrent } from '../dashboard/site/src/data/ingest/coordinator.js';
 import { normalize } from '../dashboard/site/src/data/normalize/index.js';
 import { executeDashboardQuery, queryInputNames } from '../dashboard/site/src/data/queries/declarative.js';
 import { createCanonicalQueries } from '../dashboard/site/src/data/queries/index.js';
 import { readCollection, readRecord, readTransactions } from '../dashboard/site/src/data/storage/indexeddb.js';
 import { doctorSqliteDatabase } from '../dashboard/site/src/data/storage/sqlite-doctor.js';
 import { installSqliteIndexedDB } from '../dashboard/site/src/data/storage/sqlite-indexeddb.js';
+
+const debug = createDebug('ingest');
+const debugHash = createDebug('hash-payloads');
 
 const ENTITY_COLLECTIONS = [
   'repositories',
@@ -30,15 +35,16 @@ const DEFAULT_OUTPUT_DIRECTORY = '.cao';
 const DEFAULT_LOGS_PATH = `${DEFAULT_OUTPUT_DIRECTORY}/gh-aw-logs.jsonl`;
 const DEFAULT_DATABASE_PATH = `${DEFAULT_OUTPUT_DIRECTORY}/gh-aw-logs.sqlite`;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const COMMANDS = new Set(['ingest', 'ingest-jsonl', 'audit-jsonl', 'query', 'doctor', 'download']);
+const COMMANDS = new Set(['ingest', 'ingest-jsonl', 'audit-jsonl', 'query', 'doctor', 'download', 'hash-payloads']);
 
 const USAGE = `Usage:
   cao ingest [--database FILE] --context CONTEXT_JSON --logs LOG_DIRECTORY [--retention-days DAYS|all] [--run-retention-days DAYS|all]
-  cao ingest-jsonl [--database FILE] [--input GH_AW_LOGS_JSONL] [--context CONTEXT_JSON] [--retention-days DAYS|all] [--run-retention-days DAYS|all]
+  cao ingest-jsonl [--database FILE] [--input GH_AW_LOGS_JSONL | --input-dir SHARD_DIRECTORY] [--context CONTEXT_JSON] [--retention-days DAYS|all] [--run-retention-days DAYS|all]
   cao audit-jsonl [--input GH_AW_LOGS_JSONL]
   cao query [--database FILE] (--collection NAME [--id ID] [--where FIELD=VALUE] [--limit COUNT] | --stdin)
   cao doctor [--database FILE] [--ttl-days DAYS|all] [--run-ttl-days DAYS|all]
   cao download [--url URL] [--output DIRECTORY]
+  cao hash-payloads [--input GH_AW_LOGS_JSONL] [--database FILE] [--shard-dir SHARD_DIRECTORY] [--output FILE]
 
 Collections: ${QUERY_COLLECTIONS.join(', ')}
 
@@ -314,6 +320,95 @@ export async function ingestGhAwLogDirectory(indexedDB, contextPath, logDirector
   }, options);
 }
 
+/**
+ * Ingests every `--cached-logs` wildcard shard file in a directory one by
+ * one, using a payload scope derived from each shard's file name so the
+ * transactions table can skip shards whose content hash was already
+ * recorded instead of reprocessing the entire shard set on every run.
+ *
+ * Each shard's content hash is computed up front (a cheap byte-level hash,
+ * not a JSONL parse) and checked against the transactions table via
+ * `isCachedGhAwJsonlCurrent` *before* touching the adapter. Shards that are
+ * already current are skipped without ever being parsed, so re-runs only
+ * pay the parsing/normalization cost for shards that are new or changed.
+ */
+async function ingestJsonlShardDirectory(indexedDB, shardDirectory, options = {}) {
+  let shardNames = [];
+  try {
+    shardNames = (await readdir(shardDirectory))
+      .filter((name) => name.endsWith('.jsonl'))
+      .sort();
+  } catch (error) {
+    if (error && error.code === 'ENOENT') shardNames = [];
+    else throw error;
+  }
+  const shards = [];
+  let updated = false;
+  let committedRecords = 0;
+  debug('scanning shard directory %s (%d shard(s) found)', shardDirectory, shardNames.length);
+  for (const name of shardNames) {
+    const shardPath = path.join(shardDirectory, name);
+    const scope = `gh-aw-jsonl:${name}`;
+    const content = await readFile(shardPath);
+    const payloadIdentity = cachedJsonlPayloadIdentity(content);
+    const current = await isCachedGhAwJsonlCurrent(indexedDB, {
+      payloadIdentity,
+      payloadScope: scope,
+      context: options.context,
+      workflowHints: options.workflowHints
+    });
+    if (current) {
+      debug('skipping shard %s: content hash already recorded in transactions table', name);
+      shards.push({ shard: name, skipped: true, committedRecords: 0 });
+      continue;
+    }
+    debug('ingesting shard %s: content hash is new or changed', name);
+    const result = await ingestCachedGhAwJsonl(indexedDB, content, {
+      ...options,
+      payloadScope: scope,
+      payloadIdentity
+    });
+    if (result.updated) updated = true;
+    committedRecords += result.committedRecords ?? 0;
+    debug('ingested shard %s: committedRecords=%d', name, result.committedRecords ?? 0);
+    shards.push({ shard: name, skipped: Boolean(result.skipped), committedRecords: result.committedRecords ?? 0 });
+  }
+  return { updated, committedRecords, shards };
+}
+
+/**
+ * Computes SHA-256 checksums for the activity snapshot payloads: the
+ * consolidated JSONL file, the SQLite projection, and every retained
+ * `--cached-logs` wildcard shard file. Missing files are tolerated (an
+ * absent shard directory yields no shard entries) so this can run
+ * immediately after ingestion in the same workflow step.
+ */
+async function hashActivityPayloads({ jsonlPath, databasePath, shardDirectory }) {
+  const hashFile = async (filePath) => {
+    const hash = createHash('sha256');
+    for await (const chunk of createReadStream(filePath)) hash.update(chunk);
+    const digest = hash.digest('hex');
+    debugHash('hashed %s -> %s', filePath, digest);
+    return digest;
+  };
+  const hashes = {};
+  if (jsonlPath) hashes[path.basename(jsonlPath)] = await hashFile(jsonlPath);
+  if (databasePath) hashes[path.basename(databasePath)] = await hashFile(databasePath);
+  if (shardDirectory) {
+    let shardNames = [];
+    try {
+      shardNames = (await readdir(shardDirectory)).filter((name) => name.endsWith('.jsonl')).sort();
+    } catch (error) {
+      if (!(error && error.code === 'ENOENT')) throw error;
+    }
+    debugHash('hashing %d shard(s) in %s', shardNames.length, shardDirectory);
+    for (const name of shardNames) {
+      hashes[`${path.basename(shardDirectory)}/${name}`] = await hashFile(path.join(shardDirectory, name));
+    }
+  }
+  return hashes;
+}
+
 export async function queryCanonicalData(indexedDB, options) {
   const collection = option(options, 'collection');
   if (!QUERY_COLLECTIONS.includes(collection)) {
@@ -425,6 +520,19 @@ export async function runCli(arguments_, input = process.stdin) {
     rejectUnknownOptions(options, ['input']);
     return auditJsonl(option(options, 'input', false) || DEFAULT_LOGS_PATH);
   }
+  if (command === 'hash-payloads') {
+    rejectUnknownOptions(options, ['input', 'database', 'shard-dir', 'output']);
+    const hashes = await hashActivityPayloads({
+      jsonlPath: option(options, 'input', false) ? path.resolve(option(options, 'input', false)) : undefined,
+      databasePath: option(options, 'database', false) ? path.resolve(option(options, 'database', false)) : undefined,
+      shardDirectory: option(options, 'shard-dir', false) ? path.resolve(option(options, 'shard-dir', false)) : undefined
+    });
+    const outputPath = option(options, 'output', false);
+    if (outputPath) {
+      await writeFile(path.resolve(outputPath), `${JSON.stringify(hashes, null, 2)}\n`);
+    }
+    return hashes;
+  }
   const rawQuery = command === 'query' && options.stdin
     ? await rawQueryFromStdin(options, input)
     : undefined;
@@ -452,18 +560,28 @@ export async function runCli(arguments_, input = process.stdin) {
     return { result, counts: await databaseCounts(indexedDB) };
   }
   if (command === 'ingest-jsonl') {
-    rejectUnknownOptions(options, ['database', 'input', 'context', 'retention-days', 'run-retention-days']);
+    rejectUnknownOptions(options, ['database', 'input', 'input-dir', 'context', 'retention-days', 'run-retention-days']);
+    const inputDirectory = option(options, 'input-dir', false);
+    if (inputDirectory && option(options, 'input', false)) {
+      throw new Error('Options --input and --input-dir cannot be combined');
+    }
     const contextPath = option(options, 'context', false);
+    const context = contextPath
+      ? JSON.parse(await readFile(path.resolve(contextPath), 'utf8'))
+      : undefined;
+    const ingestOptions = {
+      retentionWindowMs: retentionWindowMs(options),
+      retentionWindowMsByStore: { runs: runRetentionWindowMs(options) },
+      context
+    };
+    if (inputDirectory) {
+      const result = await ingestJsonlShardDirectory(indexedDB, path.resolve(inputDirectory), ingestOptions);
+      return { result, counts: await databaseCounts(indexedDB) };
+    }
     const result = await ingestCachedGhAwJsonl(
       indexedDB,
       createReadStream(path.resolve(option(options, 'input', false) || DEFAULT_LOGS_PATH)),
-      {
-        retentionWindowMs: retentionWindowMs(options),
-        retentionWindowMsByStore: { runs: runRetentionWindowMs(options) },
-        context: contextPath
-          ? JSON.parse(await readFile(path.resolve(contextPath), 'utf8'))
-          : undefined
-      }
+      ingestOptions
     );
     return { result, counts: await databaseCounts(indexedDB) };
   }

@@ -5,6 +5,7 @@ import test from "node:test";
 const cachePaths = [
   "${{ runner.temp }}/cao-activity/gh-aw-logs.jsonl",
   "${{ runner.temp }}/cao-activity/gh-aw-logs.sqlite",
+  "${{ runner.temp }}/cao-activity/gh-aw-logs-shards",
   "${{ runner.temp }}/cao-activity/payload-hashes.json",
   "${{ runner.temp }}/cao-activity/control-settings.json",
   "${{ runner.temp }}/cao-activity/inventory-sources.json",
@@ -52,18 +53,18 @@ test("activity workflow caches gh-aw logs and their SQLite projection", async ()
     workflow,
     /Collect dashboard inventory[\s\S]*?REPORT_INVENTORY_SOURCES: \$\{\{ runner\.temp \}\}\/cao-activity\/inventory-sources\.json[\s\S]*?Download agentic workflow logs/,
   );
-  assert.match(workflow, /--cached-jsonl "\$REPORT_GH_AW_LOGS"/);
+  assert.match(workflow, /--cached-logs "\$\{shard_prefix\}\*"/);
   assert.match(
     workflow,
-    /Ingest activity database[\s\S]*?ingest-jsonl[\s\S]*?--database "\$ACTIVITY_DATABASE"[\s\S]*?--input "\$REPORT_GH_AW_LOGS"/,
+    /Ingest activity database[\s\S]*?ingest-jsonl[\s\S]*?--database "\$ACTIVITY_DATABASE"[\s\S]*?--input-dir "\$REPORT_GH_AW_LOGS_SHARDS"/,
   );
   assert.match(
     workflow,
-    /ingest-jsonl[\s\S]*?--input "\$REPORT_GH_AW_LOGS"[\s\S]*?doctor[\s\S]*?--database "\$ACTIVITY_DATABASE"/,
+    /ingest-jsonl[\s\S]*?--input-dir "\$REPORT_GH_AW_LOGS_SHARDS"[\s\S]*?doctor[\s\S]*?--database "\$ACTIVITY_DATABASE"/,
   );
   assert.match(
     workflow,
-    /Hash activity payloads[\s\S]*?sha256sum gh-aw-logs\.jsonl[\s\S]*?sha256sum gh-aw-logs\.sqlite[\s\S]*?> payload-hashes\.json/,
+    /Hash activity payloads[\s\S]*?hash-payloads[\s\S]*?--input "\$RUNNER_TEMP\/cao-activity\/gh-aw-logs\.jsonl"[\s\S]*?--database "\$ACTIVITY_DATABASE"[\s\S]*?--shard-dir "\$REPORT_GH_AW_LOGS_SHARDS"[\s\S]*?--output "\$RUNNER_TEMP\/cao-activity\/payload-hashes\.json"/,
   );
   assert.match(
     cacheJob,
