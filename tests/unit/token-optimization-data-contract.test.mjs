@@ -53,9 +53,15 @@ test("token data contract preserves cost, quality, and evidence semantics", () =
   assert.match(dataSpec, /MUST NOT\s+be summed into a synthesized total/);
   assert.match(dataSpec, /Reliability SHALL[\s\S]*remain separate from cost/);
   assert.match(dataSpec, /Outcome quality SHALL[\s\S]*remain separate/);
-  assert.match(dataSpec, /proposed-savings-aic[\s\S]*realized-savings-aic/);
-  assert.match(dataSpec, /realized savings AIC =[\s\S]*optimized accepted-outcome count/);
-  assert.match(dataSpec, /counterfactual AIC\s+avoided/);
+  assert.match(dataSpec, /proposed-savings-aic[\s\S]*gross-realized-savings-aic/);
+  assert.match(dataSpec, /gross realized savings AIC =[\s\S]*optimized accepted-outcome count/);
+  assert.match(dataSpec, /optimization overhead AIC =[\s\S]*attributable to this opportunity/);
+  assert.match(dataSpec, /net realized savings AIC =[\s\S]*gross realized savings AIC - optimization overhead AIC/);
+  assert.match(dataSpec, /counterfactual target\s+Workflow AIC avoided/);
+  assert.match(dataSpec, /verified-net-gain/);
+  assert.match(dataSpec, /recommendation-disposition[\s\S]*applied[\s\S]*superseded[\s\S]*failed-start/);
+  assert.match(dataSpec, /recommendation-churn-rate/);
+  assert.match(dataSpec, /excludes unrelated portfolio\s+discovery/);
   assert.match(dataSpec, /Every other state SHALL\s+produce null attainment/);
 });
 
@@ -83,7 +89,12 @@ test("Dashboard Language exposes closed token-efficiency sources", () => {
   assert.match(languageSpec, /DLS-SEM-033/);
   assert.match(languageSpec, /DLS-SEM-037/);
   assert.match(languageSpec, /DLS-SEM-033–037 \| T-SEM-004/);
-  assert.match(languageSpec, /present proposed savings as realized value/);
+  assert.match(languageSpec, /gross-realized-savings-aic/);
+  assert.match(languageSpec, /optimization-overhead-aic/);
+  assert.match(languageSpec, /net-realized-savings-aic/);
+  assert.match(languageSpec, /verified-net-gain/);
+  assert.match(languageSpec, /recommendation-churn-count/);
+  assert.match(languageSpec, /charge unrelated portfolio work/);
 });
 
 test("token data contract defines required conformance fixtures", () => {
