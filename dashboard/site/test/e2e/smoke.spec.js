@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 
 const siteRoot = fileURLToPath(new URL('../..', import.meta.url));
+const authoritativeDashboard = JSON.parse(readFileSync(new URL('../../dashboard.json', import.meta.url), 'utf8'));
 
 test.beforeEach(async ({ page, context }) => {
   await context.route('http://dashboard.test/**', async (route) => {
@@ -34,6 +35,22 @@ test.beforeEach(async ({ page, context }) => {
 
 function buildPresenterModuleUrl() {
   return 'http://dashboard.test/src/presenter.js';
+}
+
+/**
+ * @param {string} pageId
+ * @param {Record<string, unknown>} [overrides]
+ */
+function builtInPage(pageId, overrides = {}) {
+  const template = authoritativeDashboard.dashboard.pages.find((/** @type {{ kind?: string, page?: string }} */ page) => (
+    page.kind === 'built-in' && page.page === pageId
+  ));
+  assert(template, `Missing built-in page template for ${pageId}`);
+  return {
+    ...template,
+    ...overrides,
+    definition: template.definition,
+  };
 }
 
 test('back navigation follows every dashboard browser history entry', async ({ page }) => {
@@ -2060,24 +2077,7 @@ test('DLS-PAGE-002 DLS-PAGE-014 built-in overview page renders the report-style 
           id: 'built-in-overview-render',
           title: 'Built In Overview Render',
           pages: [
-            {
-              id: 'overview',
-              kind: 'built-in',
-              page: 'overview',
-              title: 'Overview',
-              definition: {
-                'data-state': {
-                  availability: true
-                },
-                views: [
-                  { id: 'workflows-source', data: { source: 'workflows' } },
-                  { id: 'runs-source', data: { source: 'runs' } },
-                  { id: 'usage-source', data: { source: 'usage' } },
-                  { id: 'findings-source', data: { source: 'findings' } },
-                  { id: 'operational-values-source', data: { source: 'operational-values' } }
-                ]
-              }
-            },
+            ${JSON.stringify(builtInPage('overview', { id: 'overview', title: 'Overview' }))},
             {
               id: 'runtime',
               kind: 'custom',
@@ -2852,42 +2852,11 @@ test('DLS-PAGE-014 DLS-PAGE-015 built-in packages page renders report-style mode
           title: 'Central Agentic Ops',
           queries: ${JSON.stringify(queryDefinitions)},
           pages: [
-            {
+            ${JSON.stringify(builtInPage('packages', {
               id: 'packages',
-              kind: 'built-in',
-              page: 'packages',
               title: 'Packages',
               description: 'Activity from centrally managed packages.',
-              definition: {
-                'data-state': { availability: true },
-                views: [
-                  { id: 'package-workflows', data: { source: 'workflows' } },
-                  { id: 'package-runs', data: { source: 'runs' } },
-                  { id: 'package-usage', data: { source: 'usage' } },
-                  {
-                    id: 'packages-utilization',
-                    title: 'Package AIC utilization',
-                    data: { sources: ['workflows', 'usage'] },
-                    mark: 'element',
-                    element: 'package-utilization'
-                  },
-                  {
-                    id: 'packages-run-trend',
-                    title: 'All runs over time',
-                    data: { sources: ['workflows', 'runs', 'outcomes'] },
-                    mark: 'element',
-                    element: 'package-run-trend'
-                  },
-                  {
-                    id: 'packages-summary',
-                    title: 'All output by package',
-                    data: { sources: ['workflows', 'usage', 'findings', 'outcomes', 'runs'] },
-                    mark: 'element',
-                    element: 'package-summary-table'
-                  }
-                ]
-              }
-            },
+            }))},
             {
               id: 'operational-value',
               kind: 'custom',
@@ -3326,21 +3295,7 @@ test('DLS-PAGE-009 DLS-PAGE-014 built-in evals page renders distinguishable defi
           id: 'built-in-evals-render',
           title: 'Built In Evals Render',
           pages: [
-            {
-              id: 'evals',
-              kind: 'built-in',
-              page: 'evals',
-              title: 'Evals',
-              definition: {
-                'data-state': {
-                  availability: true
-                },
-                views: [
-                  { id: 'evals-source', data: { source: 'evals' } },
-                  { id: 'eval-observations-source', data: { source: 'eval-observations' } }
-                ]
-              }
-            }
+            ${JSON.stringify(builtInPage('evals', { id: 'evals', title: 'Evals' }))}
           ]
         }
       };
@@ -3414,20 +3369,7 @@ test('DLS-SAFE-004 DLS-SAFE-007 DLS-SAFE-008 DLS-SAFE-010 built-in findings page
           title: 'Security Dashboard',
           repository: 'githubnext/gh-aw-cao',
           pages: [
-            {
-              id: 'findings',
-              kind: 'built-in',
-              page: 'findings',
-              title: 'Findings',
-              definition: {
-                'data-state': {
-                  availability: true
-                },
-                views: [
-                  { id: 'findings-source', data: { source: 'findings' } }
-                ]
-              }
-            }
+            ${JSON.stringify(builtInPage('findings', { id: 'findings', title: 'Findings' }))}
           ]
         }
       };
