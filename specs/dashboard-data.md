@@ -386,7 +386,9 @@ following source contract:
 | Tool activity | `run.mcp_tool_usage.tool_calls[]`, with the documented audit fallback; one tool call | Preserve server, tool, status, timestamp, sizes, and correlation identity. A configured tool inventory is separate static evidence and MUST NOT be inferred from observed calls. |
 | Run reliability | Canonical Run status and conclusion from `workflow_runs` and enriched `run` envelopes; one Run attempt | Failure rate uses distinct completed attempts only. Missing conclusions do not enter either numerator or denominator. |
 | Experiment assignment | `run.experiments.assignments`; one experiment assignment per Run | Preserve experiment name and variant exactly. Cumulative counts are diagnostics and MUST NOT create assignments. |
-| Accepted outcome | Safe-output lifecycle plus authoritative GitHub disposition or the accepted-evidence rule of the frozen evaluator; one durable outcome | Creating a safe output does not establish acceptance. Accepted identity and disposition MUST be distinct from the producing Run. |
+| Accepted target outcome | Safe-output lifecycle plus authoritative GitHub disposition or the accepted-evidence rule of the frozen evaluator; one durable target-workflow outcome | Creating a safe output does not establish acceptance. Accepted identity and disposition MUST be distinct from the producing Run. |
+| Recommendation disposition | Safe-output lifecycle, explicit supersession relation, implementation Run or pull request, and authoritative GitHub disposition; one optimizer recommendation | Preserve `applied`, `superseded`, `outdated`, `duplicate`, `unapplied`, `failed-start`, or `rejected`. A generated issue, assignment attempt, or open state alone does not establish acceptance or implementation. |
+| Optimization overhead | Invocation or non-overlapping Run-aggregate AIC for auditor, optimizer, verifier, and replacement recommendations attributable to one frozen opportunity and intervention lineage | Deduplicate by Run attempt, preserve cost grain, and exclude unrelated repositories, workflows, opportunities, and portfolio dispatches. |
 | Outcome quality | Frozen grader or eval observation with evaluator digest; one outcome or stable opportunity | Compare only observations produced by the same definition and evaluator digest. Missing quality evidence is unknown. |
 | Operational value | Schema-version-4 operational-value result; one stable opportunity at one evidence cutoff | Preserve value, maturity, evidence cutoff, accepted provenance, diagnostics, and evaluator digest. |
 | Workflow declaration | Workflow inventory at the exact reviewed source revision | Supply configured tools, model, trigger, budget, and package classification. Static declarations MUST NOT prove runtime use. |
@@ -437,6 +439,8 @@ Opportunity.assignmentRunId    -> Run.id
 Opportunity.experimentId       -> Experiment.id
 Intervention.opportunityId      -> Opportunity.id
 Intervention.safeOutputId       -> Outcome.id, when published
+Intervention.supersedesId       -> Intervention.id, when replacing an earlier recommendation
+Intervention.supersededById     -> Intervention.id, inverse when known
 Comparison.interventionId       -> Intervention.id
 Comparison.operationalValueId   -> OperationalValue.observationId
 Comparison.controlVariant       -> ExperimentAssignment.variant
@@ -456,6 +460,13 @@ AIC is the primary cost measure. The canonical raw-token measures remain
 `reasoning-tokens`. Provider conventions may overlap, so these fields MUST NOT
 be summed into a synthesized total. Turns, requests, tool calls, duration, and
 cache efficiency remain separate diagnostics.
+
+Target-workflow outcomes and optimizer recommendations are different entities.
+`accepted-target-outcome-count` is the denominator for target-workflow
+efficiency. `recommendation-disposition` determines whether the proposed
+intervention was actually applied. Superseded, outdated, duplicate, unapplied,
+failed-start, and rejected recommendations MUST NOT count as accepted target
+outcomes or successful interventions.
 
 For one experiment variant:
 
@@ -482,7 +493,11 @@ hold:
 5. AIC and completed-Run conclusion evidence is complete for every included Run;
 6. outcome-quality evidence uses the same definition and evaluator digest; and
 7. the later of fourteen days after assignment or the minimum-sample threshold
-   has been reached without passing the evidence cutoff.
+   has been reached without passing the evidence cutoff;
+8. recommendation disposition is authoritative and implementation completion
+   is known; and
+9. optimization-overhead AIC is complete for distinct optimizer-family Run
+   attempts attributable to the same opportunity and intervention lineage.
 
 Reliability SHALL be the completed-Run failure rate for each variant and SHALL
 remain separate from cost. Outcome quality SHALL retain the frozen grader or
@@ -500,33 +515,51 @@ raw repository content.
 | `unmatured` | Valid evidence has not reached time or sample maturation. |
 | `unavailable` | A required source, identity, or attribution cannot be accessed or established. |
 
-Only `complete` evidence MAY produce realized savings. Every other state SHALL
+Only `complete` evidence MAY produce gross or net realized savings. Every other state SHALL
 produce null attainment and a non-sensitive missing reason. Complete comparable
 evidence scores zero when AIC per accepted outcome does not decrease,
-completed-Run failure rate increases, or outcome quality decreases. Otherwise:
+completed-Run failure rate increases, outcome quality decreases, the
+recommendation was not applied, implementation did not complete, or net savings
+are non-positive. Otherwise:
 
 ```text
-realized savings AIC =
+gross realized savings AIC =
   max(
     baseline AIC per accepted outcome - optimized AIC per accepted outcome,
     0
   )
   * optimized accepted-outcome count
 
-verified gain =
+optimization overhead AIC =
+  sum of distinct auditor, optimizer, verifier, and replacement-recommendation
+  Run AIC attributable to this opportunity and intervention lineage
+
+net realized savings AIC =
+  gross realized savings AIC - optimization overhead AIC
+
+verified net gain =
   clamp(
-    (baseline AIC per accepted outcome - optimized AIC per accepted outcome)
-      / baseline AIC per accepted outcome,
+    net realized savings AIC
+      / (baseline AIC per accepted outcome
+          * optimized accepted-outcome count),
     0,
     1
   )
 ```
 
-`realized-savings-aic` therefore measures the non-negative counterfactual AIC
-avoided for the optimized variant's accepted output volume. It is null unless
-evidence is complete and reliability and outcome quality are preserved. A
-regressed or non-improving complete comparison records zero realized savings
-and zero verified gain.
+`gross-realized-savings-aic` measures the non-negative counterfactual target
+Workflow AIC avoided for the optimized variant's accepted output volume.
+`optimization-overhead-aic` measures only optimizer-family work attributable to
+the same frozen opportunity and intervention lineage. It includes superseded
+replacement recommendations in that lineage, but excludes unrelated portfolio
+discovery and recommendations for other targets. `net-realized-savings-aic` is
+gross savings less that overhead and MAY be negative for diagnostics.
+
+The operational-value metric is `verified-net-gain`, clamped to `[0,1]`. Gross,
+overhead, and net values are null unless evidence is complete. A non-applied
+recommendation, failed implementation start, reliability or quality regression,
+or non-positive net result records zero verified net gain. The underlying gross
+and overhead measurements remain visible so zero does not hide optimizer cost.
 
 ### 5.5.4 Opportunity and intervention vocabulary
 
@@ -550,9 +583,24 @@ confidence used for classification.
 
 `intervention-state` SHALL use exactly `proposed`, `accepted`, `running`,
 `verified`, `regressed`, `inconclusive`, or `rejected`. `proposed-savings-aic`
-is an estimate attached to a proposal. `realized-savings-aic` and
-`verified-gain` require a complete matured comparison. Queries and views MUST
-NOT combine, coalesce, or label proposed savings as realized value.
+is an estimate attached to a proposal.
+
+`recommendation-disposition` SHALL use exactly `applied`, `superseded`,
+`outdated`, `duplicate`, `unapplied`, `failed-start`, or `rejected`. Disposition
+does not replace lifecycle state: for example, an intervention MAY be terminal
+and `rejected` because its recommendation disposition is `duplicate`.
+Supersession SHALL use explicit `supersedes-intervention-id` and
+`superseded-by-intervention-id` relations emitted by the safe-output producer;
+dashboard code MUST NOT infer lineage by parsing titles, bodies, or comments.
+
+`recommendation-churn-count` is the count of distinct terminal non-applied
+recommendations in one opportunity/intervention lineage.
+`recommendation-churn-rate` is that count divided by all distinct terminal
+recommendations in the lineage and is null when the denominator is zero.
+`gross-realized-savings-aic`, `optimization-overhead-aic`,
+`net-realized-savings-aic`, and `verified-net-gain` require a complete matured
+comparison. Queries and views MUST NOT combine, coalesce, or label proposed
+savings as gross or net realized value.
 
 ### 5.5.5 Canonical projection, SQL, and IndexedDB parity
 
@@ -574,11 +622,14 @@ Web Worker; views and components MUST NOT reconstruct relationships.
 
 The IndexedDB Event representation SHALL use camel-case fields:
 `opportunityId`, `opportunityKind`, `interventionId`, `interventionState`,
-`comparisonId`, `experimentId`, `evidenceState`, `costGrain`,
-`proposedSavingsAic`, `realizedSavingsAic`, `verifiedGain`,
+`recommendationDisposition`, `supersedesInterventionId`,
+`supersededByInterventionId`, `comparisonId`, `experimentId`, `evidenceState`,
+`costGrain`, `proposedSavingsAic`, `grossRealizedSavingsAic`,
+`optimizationOverheadAic`, `netRealizedSavingsAic`, `verifiedNetGain`,
+`recommendationChurnCount`, `recommendationChurnRate`,
 `baselineAicPerAcceptedOutcome`, `optimizedAicPerAcceptedOutcome`,
-`baselineFailureRate`, `optimizedFailureRate`, `outcomeQualityPreserved`, and
-the relationship IDs applicable to that Event.
+`acceptedTargetOutcomeCount`, `baselineFailureRate`, `optimizedFailureRate`,
+`outcomeQualityPreserved`, and the relationship IDs applicable to that Event.
 
 The `gh-aw-cao.dashboard-sql-export` representation SHALL emit the same Events
 with equivalent snake-case columns. Each SQL-export row SHALL retain
@@ -614,7 +665,8 @@ sources and main-thread compatibility calculations are prohibited.
 
 Normalization SHALL fail closed for an invalid source schema, malformed frozen
 identity, unresolved mandatory relationship, duplicate canonical comparison,
-unknown enum value, mixed AIC grain, or non-finite measure. An individual
+unknown enum value, cyclic or cross-opportunity supersession, mixed AIC grain,
+overhead attribution to an unrelated opportunity, or non-finite measure. An individual
 opportunity with incomplete, incomparable, unmatured, or unavailable evidence
 MAY remain queryable in that explicit state; it MUST NOT produce realized
 savings or a healthy result.

@@ -31,6 +31,10 @@ test("token optimizer exposes a replayable correctness-first contract", () => {
   assert.match(definition.evidence.collection, /assigned target repository/);
   assert.match(definition.evidence.collection, /input, output, cache-read, cache-write, and reasoning tokens/);
   assert.match(definition.evidence.collection, /never combine/);
+  assert.match(definition.evidence.collection, /optimizer-family runs attributable/);
+  assert.match(definition.evidence.collection, /charge unrelated portfolio work/);
+  assert.match(definition.evidence.accepted, /Superseded, outdated, duplicate, unapplied, failed-start, and rejected/);
+  assert.equal(definition.primaryMetric.id, "verified-net-token-efficiency-gain");
   assert.match(definition.evidence.zeroRule, /scores 0/);
   assert.match(definition.evidence.missingRule, /scores null/);
 });
@@ -39,7 +43,7 @@ test("token optimizer metric measures only verified comparable savings", () => {
   const definition = JSON.parse(execFileSync(grader, ["--definition"], { encoding: "utf8" }));
   const examples = definition.validationExamples;
 
-  assert.equal(evaluate(examples.targetAttained), 0.3);
+  assert.equal(evaluate(examples.targetAttained), 0.25);
   assert.equal(evaluate(examples.targetMissed), 0);
   assert.equal(evaluate(examples.missing), null);
   assert.equal(evaluate(examples.malformed), null);
@@ -58,7 +62,48 @@ test("token optimizer metric measures only verified comparable savings", () => {
   assert.equal(evaluate({
     ...examples.targetAttained,
     optimizedAicPerAcceptedOutcome: 0,
-  }), 1);
+  }), 0.95);
+  assert.equal(evaluate({
+    ...examples.targetAttained,
+    optimizationOverheadAic: 35,
+  }), 0);
+  assert.equal(evaluate({
+    ...examples.targetAttained,
+    optimizedAcceptedOutcomeCount: 2,
+  }), 0.275);
+  assert.equal(evaluate({
+    ...examples.targetAttained,
+    optimizedAcceptedOutcomeCount: 0,
+  }), null);
+  assert.equal(evaluate({
+    ...examples.targetAttained,
+    optimizedAcceptedOutcomeCount: -1,
+  }), null);
+  for (const recommendationDisposition of [
+    "superseded",
+    "outdated",
+    "duplicate",
+    "unapplied",
+    "failed-start",
+    "rejected",
+  ]) {
+    assert.equal(evaluate({
+      ...examples.targetAttained,
+      recommendationDisposition,
+    }), 0, recommendationDisposition);
+  }
+  assert.equal(evaluate({
+    ...examples.targetAttained,
+    implementationCompleted: false,
+  }), 0);
+  assert.equal(evaluate({
+    ...examples.targetAttained,
+    optimizationOverheadAic: null,
+  }), null);
+  assert.equal(evaluate({
+    ...examples.targetAttained,
+    recommendationDisposition: "unknown",
+  }), null);
 });
 
 test("optimization package installs the token optimizer contract", () => {
