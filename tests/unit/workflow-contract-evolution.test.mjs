@@ -17,19 +17,20 @@ test("AW Optimization combines AI Credit and ambient-context workers", () => {
     ["optimization-ai-credit-optimizer.md", "AW Optimization / AI Credit Savings"],
     ["optimization-agents-md-curator.md", "AW Optimization / AGENTS.md"],
     ["optimization-skills-curator.md", "AW Optimization / Skills"],
+    ["optimization-token-optimizer.md", "AW Optimization / Token Optimizer"],
   ];
 
   assert.equal(manifest.name, "AW Optimization");
   assert.equal(dashboard.dashboard.title, "AW Optimization");
   assert.match(orchestrator, /^name: "AW Optimization"$/m);
-  assert.match(orchestrator, /worker_credits_per_target: 1650/);
+  assert.match(orchestrator, /worker_credits_per_target: 1950/);
   assert.match(
     orchestrator,
-    /workflows: \[optimization-ai-credit-auditor, optimization-ai-credit-optimizer, optimization-agents-md-curator, optimization-skills-curator\]/,
+    /workflows: \[optimization-ai-credit-auditor, optimization-ai-credit-optimizer, optimization-agents-md-curator, optimization-skills-curator, optimization-token-optimizer\]/,
   );
   assert.deepEqual(
     Object.keys(policy["control-plane"].packages.optimization.workers).sort(),
-    ["ai-credit-auditor", "ai-credit-optimizer", "agents-md-curator", "skills-curator"].sort(),
+    ["ai-credit-auditor", "ai-credit-optimizer", "agents-md-curator", "skills-curator", "token-optimizer"].sort(),
   );
   assert.equal(policy["control-plane"].packages["ambient-context"], undefined);
   for (const [name, displayName] of workerNames) {

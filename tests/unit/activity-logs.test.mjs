@@ -36,6 +36,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.GH_ARGS_PATH, JSON.stringify(args) + "\\n");
+if (args[0] === "api") {
+  process.stdout.write(JSON.stringify({ artifacts: [] }));
+  process.exit(0);
+}
 const repository = args[args.indexOf("--repo") + 1];
 const shardPattern = args[args.indexOf("--cached-logs") + 1];
 const shardPath = shardPattern.replace(/\\*$/, "") + "fixture.jsonl";
@@ -69,7 +73,7 @@ process.stderr.write("Fetched 1 run\\n");
     const collection = await execFileAsync("bash", [path.resolve("activity/collect-logs.sh")], { env });
     const { stdout } = await execFileAsync(process.execPath, [path.resolve("activity/logs.mjs")], { env });
     const invocations = (await readFile(item.argumentsPath, "utf8")).trim().split("\n").map(JSON.parse);
-    assert.equal(invocations.length, 2);
+    assert.equal(invocations.length, 3);
     const args = invocations[0];
     assert.deepEqual(args.slice(0, 3), ["aw", "logs", "--audit"]);
     assert.equal(args.includes("--json"), false);
@@ -86,9 +90,13 @@ process.stderr.write("Fetched 1 run\\n");
     assert.equal(args.filter((value) => value === "logs").length, 1);
     assert.deepEqual(args.slice(args.indexOf("--count"), args.indexOf("--count") + 2), ["--count", "10"]);
     assert.deepEqual(args.slice(args.indexOf("--timeout"), args.indexOf("--timeout") + 2), ["--timeout", "10"]);
-    assert.deepEqual(invocations.map((invocation) => invocation[invocation.indexOf("--repo") + 1]), [
+    assert.deepEqual(invocations.slice(0, 2).map((invocation) => invocation[invocation.indexOf("--repo") + 1]), [
       "github/gh-aw",
       "githubnext/gh-aw-cao",
+    ]);
+    assert.deepEqual(invocations[2].slice(0, 2), [
+      "api",
+      "repos/githubnext/gh-aw-cao/actions/artifacts?name=token-efficiency-observation&per_page=10",
     ]);
     const runs = await readGhAwLogShards(item.logsPath);
     assert.deepEqual(runs.map((run) => run.repository), [
