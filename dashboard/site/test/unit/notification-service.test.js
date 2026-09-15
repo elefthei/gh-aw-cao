@@ -52,7 +52,7 @@ describe('dashboard notification service', () => {
     const toggle = /** @type {HTMLButtonElement} */ (
       document.querySelector('.dashboard-notification-toggle')
     );
-    const details = /** @type {HTMLOListElement} */ (
+    const details = /** @type {HTMLUListElement} */ (
       document.querySelector('.dashboard-notification-details')
     );
 
@@ -74,10 +74,47 @@ describe('dashboard notification service', () => {
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
     expect(details.hidden).toBe(false);
     expect(details.textContent).toContain('Refreshing queries.');
+    expect(details.tagName).toBe('UL');
 
     toggle.click();
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(details.hidden).toBe(true);
+  });
+
+  it('updates progress entries in place while following or preserving scroll', () => {
+    const service = createNotificationService(document);
+    const handle = service.publish({
+      message: 'Storing data...',
+      duration: 0,
+      details: ['Loading metadata.', 'Storing data...']
+    });
+    const details = /** @type {HTMLUListElement} */ (
+      document.querySelector('.dashboard-notification-details')
+    );
+    Object.defineProperties(details, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, get: () => 100 + details.children.length * 50 }
+    });
+    details.scrollTop = 100;
+    const firstEntry = details.firstElementChild;
+
+    handle.update({
+      message: 'Refreshing queries...',
+      duration: 0,
+      details: ['Loading metadata.', 'Storing data...', 'Refreshing queries.']
+    });
+    expect(details.firstElementChild).toBe(firstEntry);
+    expect(details.firstElementChild).toBe(firstEntry);
+    details.scrollTop = 20;
+    details.scrollTop = 20;
+
+    handle.update({
+      message: 'Still refreshing...',
+      duration: 0,
+      details: ['Loading metadata.', 'Storing data...', 'Refreshing queries.', 'Still refreshing.']
+    });
+
+    expect(details.scrollTop).toBe(20);
   });
 
   it('uses an assertive role for errors and rejects empty messages', () => {
