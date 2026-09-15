@@ -1545,14 +1545,19 @@ export function enableDashboardPageNavigation(root, dashboardTitle = '', renderP
     activate(route?.pageId ?? pageId, route?.parameters ?? new URLSearchParams(), true);
   });
 
-  // Hiding the app chrome (sidebar/top nav) while a full-view table scrolls resizes the
-  // scroll container, which can shrink its scrollable range enough to clamp scrollTop back
-  // toward 0. That reflow re-fires the scroll handler and toggles the chrome back on, which
-  // then re-triggers the same reflow: a hide/show feedback loop ("menu jitter"). A minimum
-  // scrollable-range guard plus enter/exit hysteresis around scrollTop breaks that loop.
+  // Hiding the app chrome while a full-view table scrolls resizes the scroll container.
+  // Phone layouts keep the chrome stable because mobile momentum scrolling can turn that
+  // reflow into a hide/show feedback loop. Larger layouts use range and hysteresis guards.
+  const FULL_VIEW_COMPACT_MEDIA = '(max-width: 700px)';
   const FULL_VIEW_SCROLL_MIN_RANGE = 48;
   const FULL_VIEW_SCROLL_ENTER = 24;
   const FULL_VIEW_SCROLL_EXIT = 4;
+  const fullViewCompactMedia = typeof defaultView?.matchMedia === 'function'
+    ? defaultView.matchMedia(FULL_VIEW_COMPACT_MEDIA)
+    : null;
+  fullViewCompactMedia?.addEventListener('change', () => {
+    if (fullViewCompactMedia.matches) root.classList.remove('dashboard-full-view-scrolled');
+  });
   let fullViewScrollFrame = 0;
   /**
    * Finds the scroll surface of a full-view table following the event target's view.
@@ -1606,6 +1611,10 @@ export function enableDashboardPageNavigation(root, dashboardTitle = '', renderP
       const syncScrolledState = () => {
         fullViewScrollFrame = 0;
         if (!scroll.isConnected || !root.classList.contains('dashboard-full-view')) return;
+        if (fullViewCompactMedia?.matches) {
+          root.classList.remove('dashboard-full-view-scrolled');
+          return;
+        }
         const scrollableRange = scroll.scrollHeight - scroll.clientHeight;
         if (scrollableRange < FULL_VIEW_SCROLL_MIN_RANGE) {
           root.classList.remove('dashboard-full-view-scrolled');
