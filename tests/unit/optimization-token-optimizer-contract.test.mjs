@@ -167,14 +167,19 @@ test("token optimizer observations use the Activity JSONL boundary, not issue te
     join(root, "dashboard", "site", "src", "data", "queries", "view-sources.js"),
     "utf8",
   );
+  const dashboard = readFileSync(
+    join(root, "dashboard", "site", "dashboard.json"),
+    "utf8",
+  );
 
   assert.match(collector, /name == "token-efficiency-observation"/);
   assert.match(collector, /kind: "token_efficiency_observation"/);
   assert.match(adapter, /envelope\.kind === 'token_efficiency_observation'/);
   assert.match(adapter, /'token_efficiency\.opportunity'/);
   assert.match(adapter, /'token_efficiency\.intervention'/);
-  assert.match(sources, /source: 'token-efficiency-opportunities'/);
-  assert.match(sources, /source: 'token-efficiency-interventions'/);
+  assert.doesNotMatch(sources, /tokenEfficiencySources/);
+  assert.match(dashboard, /"name": "token-efficiency-opportunities"[\s\S]*?"from": "events"/);
+  assert.match(dashboard, /"name": "token-efficiency-interventions"[\s\S]*?"from": "events"/);
   assert.doesNotMatch(adapter, /token_efficiency[\s\S]{0,1000}(title|body)/i);
 });
 

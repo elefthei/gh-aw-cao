@@ -184,6 +184,17 @@ export function adaptSqlExport(input) {
         const eventType = requiredString(row.event_type, 'event_type');
         const lifecycle = eventType === 'token_efficiency.intervention'
           && row.event_source === 'token-intervention-lifecycle';
+        const targetRepo = lifecycle
+          ? requiredString(row.optimization_target_repo, 'optimization_target_repo')
+          : optionalString(row.optimization_target_repo);
+        const targetCoordinates = targetRepo?.split('/');
+        if (targetCoordinates && (
+          targetCoordinates.length !== 2
+          || !targetCoordinates[0]
+          || !targetCoordinates[1]
+        )) {
+          throw new TypeError('optimization_target_repo must be an owner/repository coordinate');
+        }
         data = {
           sessionId: sourceId('session', source, requiredString(row.session_source_id, 'session_source_id')),
           timestamp: canonicalTimestamp(row.event_timestamp ?? observedAt, 'event_timestamp'),
@@ -194,15 +205,35 @@ export function adaptSqlExport(input) {
           payloadRef: optionalString(row.payload_ref),
           safeOutputType: optionalString(row.safe_output_type),
           githubEntityType: optionalString(row.github_entity_type),
-          targetRepo: lifecycle
-            ? requiredString(row.optimization_target_repo, 'optimization_target_repo')
-            : optionalString(row.optimization_target_repo),
+          targetRepo,
+          targetOrganization: targetCoordinates?.[0],
+          targetRepository: targetCoordinates?.[1],
           targetWorkflowPath: lifecycle
             ? requiredString(row.optimization_workflow_path, 'optimization_workflow_path')
             : optionalString(row.optimization_workflow_path),
           opportunityId: lifecycle
             ? requiredString(row.optimization_opportunity_id, 'optimization_opportunity_id')
             : optionalString(row.optimization_opportunity_id),
+          opportunityKind: optionalString(row.optimization_opportunity_kind),
+          assignmentRunId: optionalString(row.optimization_assignment_run_id),
+          evidenceWindowStart: optionalTimestamp(
+            row.optimization_evidence_window_start,
+            'optimization_evidence_window_start'
+          ),
+          evidenceWindowEnd: optionalTimestamp(
+            row.optimization_evidence_window_end,
+            'optimization_evidence_window_end'
+          ),
+          evidenceConfidence: optionalNumber(
+            row.optimization_evidence_confidence,
+            'optimization_evidence_confidence'
+          ),
+          costGrain: optionalString(row.optimization_cost_grain),
+          evidenceProvenance: row.optimization_evidence_provenance,
+          attributableRunIds: optionalStringArray(
+            row.optimization_attributable_run_ids,
+            'optimization_attributable_run_ids'
+          ),
           interventionId: lifecycle
             ? requiredString(row.optimization_intervention_id, 'optimization_intervention_id')
             : optionalString(row.optimization_intervention_id),

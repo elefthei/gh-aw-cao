@@ -1282,10 +1282,21 @@ function createCachedGhAwJsonlAccumulator(options) {
         }
       );
     });
+    const audit = run.audit && typeof run.audit === 'object' && !Array.isArray(run.audit)
+      ? /** @type {Record<string, unknown>} */ (run.audit)
+      : {};
+    const explicitSafeOutputs = safeOutputItemsByRun.get(id) ?? [];
+    const nestedSafeOutputs = Array.isArray(run.safe_outputs)
+      ? run.safe_outputs
+      : Array.isArray(audit.created_items) ? audit.created_items : [];
+    const safeOutputs = explicitSafeOutputs.length > 0
+      ? explicitSafeOutputs
+      : nestedSafeOutputs.map((value) => ({ value, line: enriched.line }));
     for (const tokenObservation of tokenEfficiencyObservationsByRun.get(id) ?? []) {
       const observed = timestamp(tokenObservation.observedAt) ?? completedAt ?? enriched.observedAt;
       const targetRepo = requiredString(tokenObservation.targetRepo, 'token observation targetRepo').toLowerCase();
       if (!REPOSITORY_COORDINATE_PATTERN.test(targetRepo)) continue;
+      const targetCoordinates = repositoryCoordinates(targetRepo);
       const targetWorkflowPath = requiredString(
         tokenObservation.workflowPath,
         'token observation workflowPath'
@@ -1307,6 +1318,8 @@ function createCachedGhAwJsonlAccumulator(options) {
         {
           source: 'token-optimizer-observation',
           targetRepo,
+          targetOrganization: targetCoordinates.owner,
+          targetRepository: targetCoordinates.name,
           targetWorkflowPath,
           opportunityId,
           opportunityKind: optionalString(tokenObservation.opportunityKind),
@@ -1330,6 +1343,8 @@ function createCachedGhAwJsonlAccumulator(options) {
         {
           source: 'token-optimizer-observation',
           targetRepo,
+          targetOrganization: targetCoordinates.owner,
+          targetRepository: targetCoordinates.name,
           targetWorkflowPath,
           opportunityId,
           interventionId,
@@ -1360,6 +1375,8 @@ function createCachedGhAwJsonlAccumulator(options) {
           {
             source: 'token-optimizer-observation',
             targetRepo,
+            targetOrganization: targetCoordinates.owner,
+            targetRepository: targetCoordinates.name,
             targetWorkflowPath,
             opportunityId,
             interventionId: supersedesInterventionId,
@@ -1382,6 +1399,7 @@ function createCachedGhAwJsonlAccumulator(options) {
       if (!REPOSITORY_COORDINATE_PATTERN.test(targetRepo)) {
         throw new TypeError('token lifecycle targetRepo must be an owner/repository coordinate');
       }
+      const targetCoordinates = repositoryCoordinates(targetRepo);
       const targetWorkflowPath = requiredString(
         lifecycle.workflowPath,
         'token lifecycle workflowPath'
@@ -1444,6 +1462,8 @@ function createCachedGhAwJsonlAccumulator(options) {
             'token lifecycle optimizerWorkflowName'
           ),
           targetRepo,
+          targetOrganization: targetCoordinates.owner,
+          targetRepository: targetCoordinates.name,
           targetWorkflowPath,
           opportunityId,
           interventionId,
@@ -1495,9 +1515,6 @@ function createCachedGhAwJsonlAccumulator(options) {
         }
       );
     }
-    const audit = run.audit && typeof run.audit === 'object' && !Array.isArray(run.audit)
-      ? /** @type {Record<string, unknown>} */ (run.audit)
-      : {};
     const runMcpToolUsage = run.mcp_tool_usage && typeof run.mcp_tool_usage === 'object'
       && !Array.isArray(run.mcp_tool_usage)
       ? /** @type {Record<string, unknown>} */ (run.mcp_tool_usage)
@@ -1599,13 +1616,6 @@ function createCachedGhAwJsonlAccumulator(options) {
         );
       }
     }
-    const explicitSafeOutputs = safeOutputItemsByRun.get(id) ?? [];
-    const nestedSafeOutputs = Array.isArray(run.safe_outputs)
-      ? run.safe_outputs
-      : Array.isArray(audit.created_items) ? audit.created_items : [];
-    const safeOutputs = explicitSafeOutputs.length > 0
-      ? explicitSafeOutputs
-      : nestedSafeOutputs.map((value) => ({ value, line: enriched.line }));
     safeOutputs.forEach((safeOutput, index) => {
       const record = safeOutput.value && typeof safeOutput.value === 'object'
         && !Array.isArray(safeOutput.value)

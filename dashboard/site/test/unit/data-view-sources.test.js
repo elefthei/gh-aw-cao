@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto';
+import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ingestCachedGhAwJsonl } from '../../src/data/ingest/coordinator.js';
 import { DATABASE_NAME, recordTransaction } from '../../src/data/storage/indexeddb.js';
@@ -6,6 +7,9 @@ import { loadCanonicalViewSources, queryCanonicalViewSources } from '../../src/d
 import { createDashboardQueryBudget, executeDashboardQueries } from '../../src/data/queries/declarative.js';
 
 const metadata = { 'as-of': '2026-09-09T05:00:00Z', 'artifact-generation': 'generation-a' };
+const dashboardQueries = JSON.parse(
+  readFileSync(`${process.cwd()}/dashboard.json`, 'utf8')
+).dashboard.queries;
 const sources = {
   packages: {
     rows: [{
@@ -514,9 +518,14 @@ describe('canonical view sources', () => {
       now: Date.parse('2026-09-15T05:00:00Z')
     });
 
-    const projected = await queryCanonicalViewSources(
+    const canonical = await queryCanonicalViewSources(
       indexedDB,
       {},
+      ['events']
+    );
+    const projected = executeDashboardQueries(
+      dashboardQueries,
+      canonical,
       ['token-efficiency-opportunities', 'token-efficiency-interventions']
     );
 
@@ -537,8 +546,7 @@ describe('canonical view sources', () => {
         repository: 'example',
         'intervention-state': 'proposed',
         'recommendation-disposition': 'unapplied',
-        'proposed-savings-aic': 12.5,
-        'issue-link': 'https://github.com/githubnext/gh-aw-cao/issues/11861'
+        'proposed-savings-aic': 12.5
       }),
       expect.objectContaining({
         organization: 'octo',
@@ -557,7 +565,8 @@ describe('canonical view sources', () => {
         'pull-request-link': 'https://github.com/octo/example/pull/42'
       })
     ]);
-    const latest = executeDashboardQueries([{
+    expect(projected['token-efficiency-interventions'].rows[0]).not.toHaveProperty('issue-link');
+    const latest = executeDashboardQueries([...dashboardQueries, {
       name: 'latest-token-intervention',
       from: 'token-efficiency-interventions',
       select: [
@@ -568,7 +577,7 @@ describe('canonical view sources', () => {
       ],
       'order-by': [{ field: 'observed-at', direction: 'desc' }],
       limit: 1
-    }], projected, ['latest-token-intervention']);
+    }], canonical, ['latest-token-intervention']);
     expect(latest['latest-token-intervention'].rows).toEqual([{
       'intervention-id': 'token-intervention:review-context-v1:1186001',
       'intervention-state': 'running',
