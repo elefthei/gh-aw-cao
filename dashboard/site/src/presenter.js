@@ -195,6 +195,7 @@ export function renderDashboard(input) {
     skipLink,
     appShell
   );
+  const dashboardOwner = new AbortController();
   void enableDashboardDomProvenanceWhenDebugging(root, document).catch((error) => {
     root.dataset.domProvenanceError = String(error?.message ?? error);
   });
@@ -204,12 +205,12 @@ export function renderDashboard(input) {
   root.addEventListener('dashboard-time-window-change', (event) => {
     if (!(event instanceof CustomEvent)) return;
     setTimeWindowFilter(event.detail?.start, event.detail?.end, root);
-  });
+  }, { signal: dashboardOwner.signal });
   root.addEventListener('dashboard-time-window-range-change', (event) => {
     if (!(event instanceof CustomEvent)) return;
     setTimeWindowRange(event.detail?.range, root);
-  });
-  enableResponsiveReportActions(root);
+  }, { signal: dashboardOwner.signal });
+  enableResponsiveReportActions(root, dashboardOwner.signal);
   const disposeNavigation = enableDashboardPageNavigation(
     root,
     document.dashboard.title,
@@ -256,6 +257,7 @@ export function renderDashboard(input) {
     )))
   );
   dashboardDisposals.set(root, () => {
+    dashboardOwner.abort();
     disposeNavigation();
     dashboardHorizon.dispose();
   });
@@ -332,8 +334,9 @@ function inferOrganizationName(sources) {
  * matching the title bar used by the GitHub mobile app. The factory name stays
  * visible as a secondary line below that page title.
  * @param {HTMLElement} root
+ * @param {AbortSignal} signal
  */
-function enableResponsiveReportActions(root) {
+function enableResponsiveReportActions(root, signal) {
   const actions = root.querySelector('.report-actions');
   const mobileSlot = root.querySelector('.mobile-nav-menu-actions');
   const desktopSlot = actions?.parentElement;
@@ -356,7 +359,7 @@ function enableResponsiveReportActions(root) {
     }
   };
   placeActions();
-  media.addEventListener?.('change', placeActions);
+  media.addEventListener?.('change', placeActions, { signal });
 }
 
 /**
@@ -527,7 +530,7 @@ function renderCustomPage(page, title, sources, units, dashboardDefaults, cardTe
     && view.layout === 'full-view'
     && view['lazy-list'] === true
   ));
-  const supportsMobileViewMode = mobileTableViewIndex >= 0 && views.length > 1;
+  const supportsMobileViewMode = mobileTableViewIndex >= 0;
   const sections = Array.isArray(page.sections) ? page.sections : [];
   const standaloneCalloutViewIds = new Set(sections.flatMap((section) => {
     if (!Array.isArray(section.views) || section.views.length !== 1) return [];
@@ -766,6 +769,12 @@ export function enableDashboardPageNavigation(root, dashboardTitle = '', renderP
   let activePageId = '';
   let activationRevision = 0;
   let pageOwner = new AbortController();
+  const navigationOwner = new AbortController();
+  const disposeNavigation = () => {
+    activationRevision += 1;
+    navigationOwner.abort();
+    pageOwner.abort();
+  };
   /** @type {Map<string, { filters?: Record<string, string[]>, timeWindow?: { start?: string, end?: string } }>} */
   const pageQueryContext = new Map();
   const overviewPage = pages.find((page) => page.dataset.pageId === 'overview');
@@ -781,19 +790,22 @@ export function enableDashboardPageNavigation(root, dashboardTitle = '', renderP
   const reportActions = root.querySelector('.report-actions');
   const pageScroller = root.querySelector('main.dashboard-prototype');
   const mobileViewModeToggle = root.querySelector('.mobile-view-mode-toggle');
-  /** @type {'chart'|'table'} */
+  /** @type {'chart'|'table'|'card'} */
   let mobileViewMode = 'chart';
   try {
-    mobileViewMode = globalThis.window?.localStorage?.getItem(MOBILE_VIEW_MODE_STORAGE_KEY) === 'table' ? 'table' : 'chart';
+    const storedMode = globalThis.window?.localStorage?.getItem(MOBILE_VIEW_MODE_STORAGE_KEY);
+    mobileViewMode = storedMode === 'table' || storedMode === 'card' ? storedMode : 'chart';
   } catch {
     // Storage can be unavailable in embedded or privacy-restricted contexts.
   }
   root.dataset.mobileViewMode = mobileViewMode;
-  /** @param {'chart'|'table'} mode @param {HTMLElement | undefined} page */
+  /** @type {'chart'|'table'|'card'} */
+  let nextMobileViewMode = 'table';
+  /** @param {'chart'|'table'|'card'} mode @param {HTMLElement | undefined} page */
   const setMobileViewMode = (mode, page) => {
     const pendingTable = page?.querySelector('[data-mobile-view-mode="table"][data-lazy-view]');
     if (pendingTable instanceof HTMLElement) {
-      if (mode === 'table') void hydrateLazyViewAfterPaint(pendingTable);
+      if (mode === 'table' || mode === 'card') void hydrateLazyViewAfterPaint(pendingTable);
       else cancelLazyViewHydration(pendingTable);
     }
     mobileViewMode = mode;
@@ -814,7 +826,12 @@ export function enableDashboardPageNavigation(root, dashboardTitle = '', renderP
       view.dataset.viewLayout === 'full-view'
       && (view.hasAttribute('data-view-lazy-list') || view.querySelector('[data-lazy-list]'))
     ));
-    const supportsModeSelection = Boolean(tableView) && views.some((view) => view !== tableView);
+    const supportsModeSelection = Boolean(tableView);
+    const hasChartMode = Boolean(tableView) && views.some((view) => view !== tableView);
+    if (supportsModeSelection && !hasChartMode && mobileViewMode === 'chart') {
+      mobileViewMode = 'table';
+      root.dataset.mobileViewMode = mobileViewMode;
+    }
     page?.toggleAttribute('data-mobile-view-mode-page', supportsModeSelection);
     for (const view of views) {
       if (supportsModeSelection) {
@@ -825,23 +842,27 @@ export function enableDashboardPageNavigation(root, dashboardTitle = '', renderP
     }
     if (mobileViewModeToggle instanceof HTMLButtonElement) {
       mobileViewModeToggle.hidden = !supportsModeSelection;
-      const showTable = mobileViewMode === 'chart';
-      const label = showTable ? 'Show table view' : 'Show chart view';
+      nextMobileViewMode = hasChartMode
+        ? mobileViewMode === 'chart' ? 'table' : mobileViewMode === 'table' ? 'card' : 'chart'
+        : mobileViewMode === 'card' ? 'table' : 'card';
+      const label = `Show ${nextMobileViewMode === 'card' ? 'card list' : nextMobileViewMode} view`;
       mobileViewModeToggle.setAttribute('aria-label', label);
-      mobileViewModeToggle.setAttribute('aria-pressed', String(!showTable));
+      mobileViewModeToggle.setAttribute('aria-pressed', String(mobileViewMode !== 'chart'));
       mobileViewModeToggle.setAttribute('title', label);
-      mobileViewModeToggle.replaceChildren(octicon(showTable ? 'table' : 'graph'));
+      mobileViewModeToggle.replaceChildren(octicon(
+        nextMobileViewMode === 'table' ? 'table' : nextMobileViewMode === 'card' ? 'stack' : 'graph'
+      ));
     }
     syncFullViewModeForPage(root, page);
   };
   if (mobileViewModeToggle instanceof HTMLButtonElement) {
     mobileViewModeToggle.addEventListener('click', () => {
       const page = pages.find((candidate) => candidate.dataset.pageId === activePageId);
-      setMobileViewMode(mobileViewMode === 'chart' ? 'table' : 'chart', page);
-    });
+      setMobileViewMode(nextMobileViewMode, page);
+    }, { signal: navigationOwner.signal });
     root.ownerDocument.defaultView?.matchMedia?.('(max-width: 700px)')?.addEventListener?.('change', () => {
       syncFullViewMode(pages.find((candidate) => candidate.dataset.pageId === activePageId));
-    });
+    }, { signal: navigationOwner.signal });
   }
   const defaultBreadcrumbs = [breadcrumbRoot, breadcrumbDashboard].map((link) => ({
     label: link?.textContent ?? '',
@@ -849,7 +870,7 @@ export function enableDashboardPageNavigation(root, dashboardTitle = '', renderP
     hidden: link instanceof HTMLElement ? link.hidden : false
   }));
   if (pages.length === 0 || links.length === 0) {
-    return () => pageOwner.abort();
+    return disposeNavigation;
   }
 
   root.addEventListener('dashboard-route-allocation', (event) => {
@@ -891,7 +912,7 @@ export function enableDashboardPageNavigation(root, dashboardTitle = '', renderP
     if (navigationPage && availableIds.has(navigationPage)) {
       updateNavigationLinks(links, navigationPage);
     }
-  });
+  }, { signal: navigationOwner.signal });
 
   const availableIds = new Set(pages.map((page) => page.dataset.pageId));
   const routeFromHash = () => {
@@ -933,7 +954,8 @@ export function enableDashboardPageNavigation(root, dashboardTitle = '', renderP
    * @param {boolean} [deferPopulation]
    */
   const activate = (pageId, parameters = new URLSearchParams(), deferPopulation = false) => {
-    const revision = ++activationRevision;
+     if (navigationOwner.signal.aborted) return;
+     const revision = ++activationRevision;
     pageOwner.abort();
     pageOwner = new AbortController();
     let pagePopulated = false;
@@ -1175,7 +1197,7 @@ export function enableDashboardPageNavigation(root, dashboardTitle = '', renderP
     );
   }
   syncHistoryBack();
-  historyBack?.addEventListener('click', () => defaultView?.history.back());
+  historyBack?.addEventListener('click', () => defaultView?.history.back(), { signal: navigationOwner.signal });
   root.addEventListener('click', (event) => {
     if (!(event.target instanceof Element)) return;
     const link = event.target.closest('[data-nav-page-id], [data-mobile-nav-page-id]');
@@ -1190,7 +1212,7 @@ export function enableDashboardPageNavigation(root, dashboardTitle = '', renderP
     syncHistoryBack();
     updateWithViewTransition(root.ownerDocument, () => activate(pageId, routeFromHash()?.parameters, true), 'forward');
     if (pageTitle instanceof HTMLElement) pageTitle.focus();
-  });
+  }, { signal: navigationOwner.signal });
   root.addEventListener('dashboard-query-context-change', (event) => {
     if (!(event instanceof CustomEvent)) return;
     const detail = isPlainObject(event.detail) ? event.detail : {};
@@ -1204,9 +1226,9 @@ export function enableDashboardPageNavigation(root, dashboardTitle = '', renderP
     else pageQueryContext.delete(pageId);
     const route = routeFromHash();
     activate(route?.pageId ?? pageId, route?.parameters ?? new URLSearchParams(), true);
-  });
+  }, { signal: navigationOwner.signal });
 
-  enableFullViewScrollForwarding(root, defaultView);
+  const disposeFullViewScrollForwarding = enableFullViewScrollForwarding(root, defaultView);
   /** @param {PopStateEvent} event */
   const onPopState = (event) => {
     if (!root.isConnected) {
@@ -1247,10 +1269,13 @@ export function enableDashboardPageNavigation(root, dashboardTitle = '', renderP
     ), navigationDirection);
     if (pageTitle instanceof HTMLElement) pageTitle.focus();
   };
-  browserNavigation?.addEventListener('currententrychange', syncHistoryBack);
-  defaultView?.addEventListener('popstate', onPopState);
-  defaultView?.addEventListener('hashchange', onHashChange);
-  return () => pageOwner.abort();
+  browserNavigation?.addEventListener('currententrychange', syncHistoryBack, { signal: navigationOwner.signal });
+  defaultView?.addEventListener('popstate', onPopState, { signal: navigationOwner.signal });
+  defaultView?.addEventListener('hashchange', onHashChange, { signal: navigationOwner.signal });
+  return () => {
+    disposeFullViewScrollForwarding();
+    disposeNavigation();
+  };
 }
 
 /**

@@ -431,6 +431,129 @@ describe('data view renderer', () => {
     expect(rendered?.querySelector('[data-table-more]')?.hasAttribute('hidden')).toBe(true);
   });
 
+  it('replays continuation pages when table and mobile card modes load the same rows', async () => {
+    const load = vi.fn(async () => ({
+      rows: [{ event: 'event-26' }],
+      continuationToken: undefined
+    }));
+    const rendered = renderDataView('table', {
+      pageId: 'events',
+      title: 'Events',
+      view: {
+        mark: 'table',
+        controls: 'interactive',
+        'lazy-list': true,
+        layout: 'full-view',
+        encoding: { columns: [{ field: 'event', type: 'nominal' }] }
+      },
+      sourceName: 'events',
+      rows: Array.from({ length: 25 }, (_, index) => ({ event: `event-${index + 1}` })),
+      metadata,
+      contextDetails: [],
+      headingTag: 'h3',
+      prepareTableRows: (rows) => rows,
+      buildChartPoints: () => [],
+      prepareChartPoints: () => [],
+      toText: String,
+      continuation: { token: 'page-2', totalRows: 26, load }
+    });
+
+    const tableMore = rendered?.querySelector('[data-table-more]');
+    expect(tableMore).toBeInstanceOf(HTMLButtonElement);
+    /** @type {HTMLButtonElement} */ (tableMore).click();
+    await vi.waitFor(() => expect(rendered?.querySelectorAll('tbody tr')).toHaveLength(26));
+    const cardMore = rendered?.querySelector('[data-card-list-more]');
+    expect(cardMore).toBeInstanceOf(HTMLButtonElement);
+    /** @type {HTMLButtonElement} */ (cardMore).click();
+    await vi.waitFor(() => expect(rendered?.querySelectorAll('[data-mobile-card-list] li')).toHaveLength(26));
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders quantitative mobile table fields as labeled card metrics', () => {
+    const rendered = renderDataView('table', {
+      pageId: 'packages',
+      title: 'Packages',
+      view: {
+        mark: 'table',
+        controls: 'interactive',
+        'lazy-list': true,
+        layout: 'full-view',
+        encoding: {
+          columns: [
+            { field: 'package-name', type: 'nominal', title: 'Package' },
+            { field: 'workflows', type: 'quantitative', title: 'Workflows' },
+            { field: 'runs', type: 'quantitative', title: 'Runs' },
+            { field: 'registration', type: 'nominal', title: 'Registration', display: 'active-state' }
+          ]
+        }
+      },
+      sourceName: 'package-inventory',
+      rows: [{ 'package-name': 'Daily ops', workflows: 2, runs: 14, registration: 'active' }],
+      cardTemplates: {
+        package: {
+          icon: 'package',
+          title: { field: 'package-name', title: 'Package' },
+          labels: [{ field: 'registration', title: 'Registration', display: 'active-state' }],
+          details: [
+            { field: 'workflows', title: 'Workflows' },
+            { field: 'runs', title: 'Runs' }
+          ]
+        }
+      },
+      metadata,
+      contextDetails: [],
+      headingTag: 'h3',
+      prepareTableRows: (rows) => rows,
+      buildChartPoints: () => [],
+      prepareChartPoints: () => [],
+      toText: String
+    });
+
+    const card = rendered?.querySelector('[data-mobile-card-list] .entity-card-list-card');
+    expect(card?.querySelector('.issue-list-card-meta')?.textContent).toBe('');
+    expect(card?.querySelector('.entity-card-list-metric strong')?.textContent).toBe('2');
+    expect(card?.querySelector('.entity-card-list-metric span')?.textContent).toBe('Workflows');
+    expect(card?.querySelectorAll('.entity-card-list-metric')).toHaveLength(2);
+    const labels = card?.querySelector('.issue-list-labels');
+    expect(labels?.textContent).toContain('active');
+    expect(labels?.getAttribute('aria-label')).toBe('Daily ops labels and metrics');
+  });
+
+  it('lets a mobile card continuation retry after a load failure', async () => {
+    const load = vi.fn()
+      .mockRejectedValueOnce(new Error('worker unavailable'))
+      .mockResolvedValueOnce({ rows: [{ event: 'event-26' }], continuationToken: undefined });
+    const rendered = renderDataView('table', {
+      pageId: 'events',
+      title: 'Events',
+      view: {
+        mark: 'table',
+        controls: 'interactive',
+        'lazy-list': true,
+        layout: 'full-view',
+        encoding: { columns: [{ field: 'event', type: 'nominal' }] }
+      },
+      sourceName: 'events',
+      rows: Array.from({ length: 25 }, (_, index) => ({ event: `event-${index + 1}` })),
+      metadata,
+      contextDetails: [],
+      headingTag: 'h3',
+      prepareTableRows: (rows) => rows,
+      buildChartPoints: () => [],
+      prepareChartPoints: () => [],
+      toText: String,
+      continuation: { token: 'page-2', totalRows: 26, load }
+    });
+    const more = /** @type {HTMLButtonElement} */ (rendered?.querySelector('[data-card-list-more]'));
+
+    more.click();
+    await vi.waitFor(() => expect(more.textContent).toBe('Retry loading cards'));
+    expect(more.disabled).toBe(false);
+    more.click();
+    await vi.waitFor(() => expect(rendered?.querySelectorAll('[data-mobile-card-list] li')).toHaveLength(26));
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
   it('omits table facets for columns with filtering disabled', () => {
     const rendered = renderDataView('table', {
       pageId: 'repositories',

@@ -125,7 +125,8 @@ test('ingestion notifications reveal scrollable progress history on click', asyn
     <script type="module">
       import { publishNotification } from 'http://dashboard.test/src/notification-service.js';
       const ingestionNotification = publishNotification({
-        message: 'Storing data...',
+        message: '750 KB/1.5 MB · 3s remaining',
+        icon: 'download',
         duration: 0,
         details: Array.from({ length: 40 }, (_, index) => 'Activity event ' + (index + 1))
       });
@@ -135,11 +136,12 @@ test('ingestion notifications reveal scrollable progress history on click', asyn
     </script>
   `);
 
-  const toggle = page.getByRole('button', { name: /Storing data.*Show ingestion progress history/ });
+  const toggle = page.getByRole('button', { name: /750 KB\/1.5 MB.*Show ingestion progress history/ });
   const details = page.locator('.dashboard-notification-details');
+  await expect(toggle.locator('.octicon-download')).toBeVisible();
   await expect(details).toBeHidden();
   await toggle.click();
-  const collapse = page.getByRole('button', { name: /Storing data.*Hide ingestion progress history/ });
+  const collapse = page.getByRole('button', { name: /750 KB\/1.5 MB.*Hide ingestion progress history/ });
   await expect(collapse).toHaveAttribute('aria-expanded', 'true');
   await expect(details).toBeVisible();
   await expect(details.getByRole('listitem')).toHaveCount(40);
@@ -809,7 +811,7 @@ test('Runs renders a last-week swimlane above its responsive table and scrolls l
   await expect.poll(async () => scroll.locator(':scope > .table-filter').evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
 });
 
-test('a mobile page combining a chart with a full-view table switches between the two layouts', async ({ page }) => {
+test('a mobile page combining a chart with a full-view table switches between chart, table, and card layouts', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.setContent(`
     <div id="root"></div>
@@ -895,6 +897,15 @@ test('a mobile page combining a chart with a full-view table switches between th
   await expect(scroll).toBeVisible();
   await expect(dashboardRoot).toHaveClass(/dashboard-full-view/);
   await expect(page.locator('.org-sidebar')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Show card list view' }).click();
+  await expect(chart).toBeHidden();
+  await expect(scroll).toBeHidden();
+  await expect(page.locator('[data-mobile-card-list]')).toBeVisible();
+  await expect(page.locator('[data-mobile-card-list] .entity-card-list-card').first()).toBeVisible();
+  await expect(page.locator('[data-mobile-card-list] .entity-card-list-card').first()).toContainText('copilot / model-1');
+  await expect(dashboardRoot).toHaveClass(/dashboard-full-view/);
+  await expect(page.getByRole('heading', { name: 'Engines and models', level: 3 })).toBeHidden();
 
   await page.getByRole('button', { name: 'Show chart view' }).click();
   await expect(chart).toBeVisible();
@@ -2876,7 +2887,7 @@ test('pie charts match the report layout at medium viewport widths', async ({ pa
   await expect(legend).toBeVisible();
 });
 
-test('DLS-PAGE-014 DLS-PAGE-015 built-in packages page renders report-style mode filters, AIC utilization, and run trends in browser', async ({ page }) => {
+test('DLS-PAGE-014 DLS-PAGE-015 built-in packages page renders value, inventory, and package activity in browser', async ({ page }) => {
   const presenterModuleUrl = buildPresenterModuleUrl();
   const queryDefinitions = JSON.parse(readFileSync(new URL('../../dashboard.json', import.meta.url), 'utf8')).dashboard.queries;
 
@@ -3144,7 +3155,10 @@ test('DLS-PAGE-014 DLS-PAGE-015 built-in packages page renders report-style mode
         },
         'operational-values': {
           source: 'operational-values',
-          rows: [],
+          rows: [
+            { workflow: '.github/workflows/ambient-context-worker.md', run: '4', 'operational-value': 0.75 },
+            { workflow: '.github/workflows/aw-doctor.md', run: '1', 'operational-value': 0.25 }
+          ],
           metadata
         }
       };
@@ -3169,6 +3183,10 @@ test('DLS-PAGE-014 DLS-PAGE-015 built-in packages page renders report-style mode
   await expect(page.locator('[data-page-id="packages"] [data-lazy-list]')).toBeVisible();
   await expect(page.locator('[data-page-id="packages"] [data-table-filter]')).toBeVisible();
   await expect(page.locator('[data-page-id="packages"] .table-summary-row')).toBeVisible();
+  const valueChart = page.locator('[data-view-id="packages-value-created"]');
+  await expect(valueChart.locator('[data-chart-widget="pie"]')).toBeVisible();
+  await expect(valueChart.locator('.chart-legend-pie')).toContainText('Ambient Context');
+  await expect(valueChart.locator('.chart-legend-pie')).toContainText('AW Doctor');
   const packageRows = page.locator('[data-page-id="packages"] .custom-table tbody tr');
   await expect(packageRows).toHaveCount(2);
   await expect(page.locator('[data-page-id="packages"] .custom-table thead tr').first().locator('th')).toHaveText([
@@ -3179,11 +3197,13 @@ test('DLS-PAGE-014 DLS-PAGE-015 built-in packages page renders report-style mode
     'Runs',
     'Dispatches',
     'AIC',
+    'Value created',
     'Registration'
   ]);
   const awDoctorSummary = packageRows.filter({ hasText: 'AW Doctor' });
   await expect(awDoctorSummary).toContainText('AW Doctor');
   await expect(awDoctorSummary).toContainText('23.9');
+  await expect(awDoctorSummary.locator('[data-field="value-created"]')).toHaveText('0.25');
   await expect(awDoctorSummary.getByRole('button', { name: 'Update package' })).toHaveCount(0);
   await expect(awDoctorSummary.getByRole('link', { name: 'View AW Doctor package dashboard' })).toHaveAttribute('href', '#page-package-insights?package=aw-doctor');
   await expect(awDoctorSummary.locator('[data-field="modes"] .mode-badge')).toHaveText('review');
@@ -4854,7 +4874,7 @@ test('phone navigation uses overview actions and a full-label view menu without 
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });
 
-test('phone pages toggle between chart and full-view lazy table modes', async ({ page }) => {
+test('phone pages toggle between chart, full-view table, and card-list modes', async ({ page }) => {
   const presenterModuleUrl = buildPresenterModuleUrl();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.setContent(`
@@ -4924,10 +4944,99 @@ test('phone pages toggle between chart and full-view lazy table modes', async ({
 
   await toggle.click();
 
-  await expect(page.getByRole('button', { name: 'Show chart view' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Show chart view' }).locator('.octicon-graph')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Show card list view' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Show card list view' }).locator('.octicon-stack')).toBeVisible();
   await expect(chart).toBeHidden();
   await expect(table).toBeVisible();
   await expect(root).toHaveClass(/dashboard-full-view/);
   await expect.poll(() => page.evaluate(() => localStorage.getItem('central-agentic-ops.dashboard.mobile-view-mode'))).toBe('table');
+
+  await page.getByRole('button', { name: 'Show card list view' }).click();
+  await expect(page.getByRole('button', { name: 'Show chart view' }).locator('.octicon-graph')).toBeVisible();
+  await expect(chart).toBeHidden();
+  await expect(table.locator('.table-region')).toBeHidden();
+  await expect(table.locator('[data-mobile-card-list]')).toBeVisible();
+  await expect(root).toHaveClass(/dashboard-full-view/);
+  await expect(table.getByRole('heading', { name: 'Runs', level: 3 })).toBeHidden();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('central-agentic-ops.dashboard.mobile-view-mode'))).toBe('card');
+});
+
+test('phone full-view lazy tables switch between table and card-list modes', async ({ page }) => {
+  const presenterModuleUrl = buildPresenterModuleUrl();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setContent(`
+    <div id="root"></div>
+    <script type="module">
+      import { renderDashboard } from ${JSON.stringify(presenterModuleUrl)};
+      document.querySelector('#root').append(renderDashboard({
+        document: {
+          languageVersion: '0.1.0',
+          dashboard: {
+            id: 'phone-table-card-dashboard',
+            title: 'Phone Table Cards',
+            'card-templates': [{
+              id: 'repository',
+              icon: 'repo',
+              title: { field: 'repository-coordinate' },
+              labels: [],
+              details: [{ field: 'organization', title: 'Organization' }]
+            }],
+            pages: [{
+              id: 'repositories',
+              kind: 'custom',
+              title: 'Repositories',
+              views: [{
+                id: 'repositories-table',
+                title: 'Repositories',
+                data: { source: 'repositories' },
+                mark: 'table',
+                controls: 'interactive',
+                'lazy-list': true,
+                layout: 'full-view',
+                encoding: {
+                  columns: [
+                    { field: 'repository-coordinate', type: 'nominal', title: 'Repository' },
+                    { field: 'organization', type: 'nominal', title: 'Organization' }
+                  ]
+                }
+              }]
+            }]
+          }
+        },
+        sources: {
+          repositories: {
+            source: 'repositories',
+            rows: [{
+              'repository-coordinate': 'githubnext/gh-aw-cao',
+              organization: 'githubnext'
+            }],
+            metadata: {
+              availability: 'available',
+              completeness: 'complete',
+              freshness: 'fresh'
+            }
+          }
+        }
+      }));
+    </script>
+  `);
+
+  const root = page.locator('.dashboard-root');
+  const table = page.locator('[data-view-id="repositories-table"] .table-region');
+  const cards = page.locator('[data-mobile-card-list]');
+  await expect(table).toBeVisible();
+  await expect(cards).toBeHidden();
+  await expect(root).toHaveClass(/dashboard-full-view/);
+
+  await page.getByRole('button', { name: 'Show card list view' }).click();
+  await expect(table).toBeHidden();
+  await expect(cards).toBeVisible();
+  await expect(cards.locator('.entity-card-list-card')).toContainText('githubnext/gh-aw-cao');
+  await expect(root).toHaveClass(/dashboard-full-view/);
+  await expect(page.getByRole('heading', { name: 'Repositories', level: 3 })).toBeHidden();
+
+  await page.getByRole('button', { name: 'Show table view' }).click();
+  await expect(table).toBeVisible();
+  await expect(cards).toBeHidden();
+  await expect(root).toHaveClass(/dashboard-full-view/);
 });

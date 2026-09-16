@@ -17,6 +17,7 @@ describe('data-worker ingestion progress', () => {
     vi.useFakeTimers();
     const postMessage = vi.fn();
     const progress = startIngestionProgress({ postMessage });
+    progress.start();
 
     vi.advanceTimersByTime(3_000);
 
@@ -24,6 +25,7 @@ describe('data-worker ingestion progress', () => {
       type: 'notification',
       notification: expect.objectContaining({
         message: 'Preparing data...',
+        icon: 'download',
         detailsSubtitle: expect.stringContaining('local copy'),
         details: ['Preparing data... +3s'],
         duration: 0
@@ -40,6 +42,7 @@ describe('data-worker ingestion progress', () => {
     });
     const postMessage = vi.fn();
     const progress = startIngestionProgress({ postMessage });
+    progress.start();
 
     progress.complete();
     delayedReport();
@@ -55,6 +58,7 @@ describe('data-worker ingestion progress', () => {
     vi.useFakeTimers();
     const postMessage = vi.fn();
     const progress = startIngestionProgress({ postMessage });
+    progress.start();
 
     progress.setWorkload(1_500_000);
     progress.update({ bytesProcessed: 750_000, recordsIngested: 1_000, totalBytes: 1_500_000 });
@@ -65,7 +69,8 @@ describe('data-worker ingestion progress', () => {
     expect(postMessage).toHaveBeenLastCalledWith({
       type: 'notification',
       notification: expect.objectContaining({
-        message: 'Saving local copy · 750 KB/1.5 MB · 3s remaining',
+        message: '750 KB/1.5 MB · 3s remaining',
+        icon: 'download',
         details: [
           'Preparing data... +0s',
           'Parsing 1,000 rec, 750 KB/1.5 MB. +0s',
@@ -81,7 +86,7 @@ describe('data-worker ingestion progress', () => {
     expect(postMessage).toHaveBeenLastCalledWith({
       type: 'notification',
       notification: expect.objectContaining({
-        message: 'Saving local copy · 750 KB/1.5 MB · 4s remaining'
+        message: '750 KB/1.5 MB · 4s remaining'
       })
     });
 
@@ -95,6 +100,7 @@ describe('data-worker ingestion progress', () => {
   it('publishes shard import state as the manifest and imports progress', () => {
     const postMessage = vi.fn();
     const progress = startIngestionProgress({ postMessage });
+    progress.start();
 
     progress.reportShardImportProgress(0, 4);
     progress.reportShardImportProgress(2, 4);
@@ -114,6 +120,7 @@ describe('data-worker ingestion progress', () => {
     vi.useFakeTimers();
     const postMessage = vi.fn();
     const progress = startIngestionProgress({ postMessage });
+    progress.start();
 
     for (let index = 1; index <= 105; index += 1) progress.log(`Step ${index}`);
     progress.log('Step 105');
@@ -130,6 +137,7 @@ describe('data-worker ingestion progress', () => {
     vi.useFakeTimers();
     const postMessage = vi.fn();
     const progress = startIngestionProgress({ postMessage });
+    progress.start();
 
     progress.setWorkload(2_048);
     progress.update({ bytesProcessed: 1_024, recordsIngested: 42, totalBytes: 2_048 });
@@ -142,7 +150,8 @@ describe('data-worker ingestion progress', () => {
       type: 'notification',
       notification: expect.objectContaining({
         id: expect.stringMatching(/^ingestion-progress-/),
-        message: 'Processing local copy · 1.0 KB/2.0 KB · 3s remaining',
+        message: '1.0 KB/2.0 KB · 3s remaining',
+        icon: 'download',
         duration: 0
       })
     });
@@ -152,7 +161,7 @@ describe('data-worker ingestion progress', () => {
     expect(postMessage).toHaveBeenLastCalledWith({
       type: 'notification',
       notification: expect.objectContaining({
-        message: 'Processing local copy · 2.0 KB/2.0 KB · 0s remaining'
+        message: '2.0 KB/2.0 KB · 0s remaining'
       })
     });
 
@@ -163,5 +172,17 @@ describe('data-worker ingestion progress', () => {
     });
     vi.advanceTimersByTime(1_000);
     expect(postMessage).toHaveBeenCalledTimes(5);
+  });
+
+  it('stays silent when ingestion completes before work is required', () => {
+    vi.useFakeTimers();
+    const postMessage = vi.fn();
+    const progress = startIngestionProgress({ postMessage });
+
+    progress.log('Checking the published payload identity.');
+    vi.advanceTimersByTime(3_000);
+    progress.complete();
+
+    expect(postMessage).not.toHaveBeenCalled();
   });
 });

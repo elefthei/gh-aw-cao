@@ -488,8 +488,8 @@ describe('dashboard document validation', () => {
 
   it('defines every other editable experimental page as one full-view lazy table', () => {
     // Pages that intentionally compose more than one editable view, asserted separately below
-    // or by their own focused suites: safe-outputs, maintenance, entity cards, and cost.
-    const multiViewPageIds = new Set(['safe-outputs', 'maintenance', 'issues', 'pull-requests', 'cost']);
+    // or by their own focused suites: safe-outputs, maintenance, entity cards, cost, and audit.
+    const multiViewPageIds = new Set(['safe-outputs', 'maintenance', 'issues', 'pull-requests', 'cost', 'audit']);
     const document = JSON.parse(authoritativeDashboardSource);
     const experimentalIds = new Set(document.dashboard.navigation
       .filter((/** @type {{ experimental?: boolean }} */ section) => section.experimental)
@@ -1034,7 +1034,8 @@ dashboard:
     const runsPage = document.dashboard.pages.find((/** @type {{ id: string }} */ page) => page.id === 'runs');
     const transactionsPage = document.dashboard.pages.find((/** @type {{ id: string }} */ page) => page.id === 'transactions');
 
-    const packagesView = packagesPage.definition.views[0];
+    const packagesChart = packagesPage.definition.views.find((/** @type {{ id: string }} */ view) => view.id === 'packages-value-created');
+    const packagesView = packagesPage.definition.views.find((/** @type {{ id: string }} */ view) => view.id === 'packages-inventory');
     const workflowsView = workflowsPage.definition.views.find((/** @type {{ id: string }} */ view) => view.id === 'workflows-inventory');
     const packageWorkflowsView = packageDetailPage.views.find((/** @type {{ id: string }} */ view) => view.id === 'package-workflow-table');
     const runsView = runsPage.definition.views.find((/** @type {{ id: string }} */ view) => view.id === 'runs-runs-source');
@@ -1049,6 +1050,15 @@ dashboard:
       });
     }
     expect(packagesView.data.source).toBe('package-inventory');
+    expect(packagesChart).toMatchObject({
+      data: { source: 'package-inventory' },
+      mark: 'chart',
+      chart: 'pie',
+      encoding: {
+        x: { field: 'package-name', type: 'nominal', title: 'Package' },
+        y: { field: 'value-created', type: 'quantitative', aggregate: 'sum', title: 'Value created', unit: 'grade' }
+      }
+    });
     expect(packagesView.encoding.href).toEqual({ field: 'package-dashboard-link', type: 'nominal' });
     expect(packagesView.encoding.columns.map((/** @type {{ title: string }} */ column) => column.title)).toEqual([
       'Package',
@@ -1058,6 +1068,7 @@ dashboard:
       'Runs',
       'Dispatches',
       'AIC',
+      'Value created',
       'Registration'
     ]);
     expect(packagesView.encoding.columns.find((/** @type {{ field: string }} */ column) => column.field === 'modes')?.display).toBe('mode');
@@ -1081,8 +1092,13 @@ dashboard:
       'lazy-list': true,
       layout: 'full-view'
     });
-    expect(packagesPage.definition.views).toHaveLength(1);
-    expect(workflowsPage.definition.views).toHaveLength(2);
+    expect(packagesPage.definition.views.map((/** @type {{ id: string }} */ view) => view.id)).toEqual([
+      'packages-value-created',
+      'packages-inventory'
+    ]);
+    expect(workflowsPage.definition.views.map((/** @type {{ id?: string } | string} */ view) =>
+      typeof view === 'string' ? view : view.id
+    )).toEqual(['workflows-by-runs', 'workflows-inventory', 'entity-workflows']);
     expect(runsPage.definition.views).toHaveLength(2);
     expect(document.dashboard.navigation.find((/** @type {{ label?: string }} */ section) => !section.label).pages).toEqual([
       'overview',
@@ -5428,6 +5444,149 @@ describe('declarative query validation', () => {
 
   it('accepts a derived query used as a logical source', () => {
     expect(validateDashboardDocument(queryDocument([aicQuery, validQuery])).ok).toBe(true);
+  });
+
+  it('accepts bounded aggregate-local filters over pre-aggregation scalar fields', () => {
+    const result = validateDashboardDocument(queryDocument([{
+      name: 'workflow-costs',
+      from: 'events',
+      aggregate: {
+        by: ['workflow'],
+        values: [{
+          field: 'request-count',
+          as: 'blocked-requests',
+          reducer: 'sum',
+          filter: {
+            predicates: [
+              { field: 'event-type', equals: 'firewall.request.blocked' },
+              { field: 'event-source', in: ['firewall', 'gateway'] }
+            ]
+          }
+        }]
+      }
+    }]));
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('accepts aggregate-local filters at every declared size ceiling', () => {
+    const result = validateDashboardDocument(queryDocument([{
+      name: 'workflow-costs',
+      from: 'events',
+      aggregate: {
+        by: ['workflow'],
+        values: Array.from(
+          { length: DASHBOARD_QUERY_LIMITS['max-aggregate-values'] },
+          (_, index) => ({
+            field: 'event',
+            as: `event-count-${index}`,
+            reducer: 'count',
+            ...(index === 0 ? {
+              filter: {
+                predicates: Array.from(
+                  { length: DASHBOARD_QUERY_LIMITS['max-aggregate-filter-predicates'] },
+                  () => ({
+                    field: 'event-type',
+                    in: Array.from(
+                      { length: DASHBOARD_QUERY_LIMITS['max-predicate-alternatives'] },
+                      (_, alternative) => `event-type-${alternative}`
+                    )
+                  })
+                )
+              }
+            } : {})
+          })
+        )
+      }
+    }]));
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('rejects invalid aggregate-local filter shapes, fields, and literals', () => {
+    const result = validateDashboardDocument(queryDocument([{
+      name: 'workflow-costs',
+      from: 'events',
+      aggregate: {
+        values: [
+          {
+            field: 'event',
+            as: 'bad-operator',
+            reducer: 'count',
+            filter: { predicates: [{ field: 'event-type', equals: 'blocked', in: ['blocked'] }] }
+          },
+          {
+            field: 'event',
+            as: 'bad-field',
+            reducer: 'count',
+            filter: { predicates: [{ field: 'run-link', equals: 'run' }] }
+          },
+          {
+            field: 'event',
+            as: 'bad-literal',
+            reducer: 'count',
+            filter: { predicates: [{ field: 'event-type', equals: null }] }
+          },
+          {
+            field: 'event',
+            as: 'too-many',
+            reducer: 'count',
+            filter: {
+              predicates: Array.from(
+                { length: DASHBOARD_QUERY_LIMITS['max-aggregate-filter-predicates'] + 1 },
+                () => ({ field: 'event-type', equals: 'blocked' })
+              )
+            }
+          },
+          {
+            field: 'event',
+            as: 'too-many-alternatives',
+            reducer: 'count',
+            filter: {
+              predicates: [{
+                field: 'event-type',
+                in: Array.from(
+                  { length: DASHBOARD_QUERY_LIMITS['max-predicate-alternatives'] + 1 },
+                  (_, index) => `event-type-${index}`
+                )
+              }]
+            }
+          }
+        ]
+      }
+    }]));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: 'DLS-E003', path: '$.dashboard.queries[0].aggregate.values[0].filter.predicates[0]' }),
+        expect.objectContaining({ code: 'DLS-E011', path: '$.dashboard.queries[0].aggregate.values[1].filter.predicates[0].field' }),
+        expect.objectContaining({ code: 'DLS-E003', path: '$.dashboard.queries[0].aggregate.values[2].filter.predicates[0].equals' }),
+        expect.objectContaining({ code: 'DLS-E003', path: '$.dashboard.queries[0].aggregate.values[3].filter.predicates' }),
+        expect.objectContaining({ code: 'DLS-E003', path: '$.dashboard.queries[0].aggregate.values[4].filter.predicates[0].in' })
+      ]));
+    }
+  });
+
+  it('rejects aggregate value lists above the declared ceiling', () => {
+    const result = validateDashboardDocument(queryDocument([{
+      name: 'workflow-costs',
+      from: 'events',
+      aggregate: {
+        by: ['workflow'],
+        values: Array.from(
+          { length: DASHBOARD_QUERY_LIMITS['max-aggregate-values'] + 1 },
+          (_, index) => ({ field: 'event', as: `event-count-${index}`, reducer: 'count' })
+        )
+      }
+    }]));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: 'DLS-E003', path: '$.dashboard.queries[0].aggregate.values' })
+      ]));
+    }
   });
 
   it('accepts built-in grouped prediction methods and their output fields', () => {

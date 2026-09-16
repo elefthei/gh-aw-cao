@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
-import { renderDashboard as renderDashboardView, enableDashboardKeyboardNavigation, enableDashboardPageNavigation, dashboardPageLazySourceNames, dashboardPageSourceNames, resolveQueryDrillPageTitle } from '../../src/presenter.js';
+import { renderDashboard as renderDashboardView, disposeDashboard, enableDashboardKeyboardNavigation, enableDashboardPageNavigation, dashboardPageLazySourceNames, dashboardPageSourceNames, resolveQueryDrillPageTitle } from '../../src/presenter.js';
 import { processDataRequest } from '../../src/data-worker.js';
 import { compileDashboardViewPayloadQueries } from '../../src/data/queries/view-payload-compiler.js';
 import { deriveDataHealthSources } from '../../src/data-health.js';
@@ -1581,9 +1581,9 @@ describe('presenter built-in and custom pages', () => {
 
       expect(rendered.dataset.mobileViewMode).toBe('table');
       expect(page?.querySelector('[data-view-id="runs-table"] .dashboard-lazy-view-skeleton')).not.toBeNull();
-      expect(toggle?.getAttribute('aria-label')).toBe('Show chart view');
+      expect(toggle?.getAttribute('aria-label')).toBe('Show card list view');
       expect(toggle?.getAttribute('aria-pressed')).toBe('true');
-      expect(toggle?.querySelector('.octicon-graph')).not.toBeNull();
+      expect(toggle?.querySelector('.octicon-stack')).not.toBeNull();
       expect(window.localStorage.getItem('central-agentic-ops.dashboard.mobile-view-mode')).toBe('table');
 
       await vi.waitFor(() => expect(animationFrames).toHaveLength(1));
@@ -1594,9 +1594,16 @@ describe('presenter built-in and custom pages', () => {
       await vi.waitFor(() => {
         expect(page?.querySelector('[data-view-id="runs-table"] .dashboard-lazy-view-skeleton')).toBeNull();
       });
+      expect(page?.querySelector('[data-mobile-card-list] .entity-card-list-card')?.textContent).toContain('1');
+
+      toggle?.click();
+      expect(rendered.dataset.mobileViewMode).toBe('card');
+      expect(toggle?.getAttribute('aria-label')).toBe('Show chart view');
+      expect(toggle?.querySelector('.octicon-graph')).not.toBeNull();
+      expect(window.localStorage.getItem('central-agentic-ops.dashboard.mobile-view-mode')).toBe('card');
 
       const restored = renderDashboard({ document, sources });
-      expect(restored.dataset.mobileViewMode).toBe('table');
+      expect(restored.dataset.mobileViewMode).toBe('card');
       expect(restored.querySelector('.mobile-view-mode-toggle')?.getAttribute('aria-label')).toBe('Show chart view');
     } finally {
       requestAnimationFrame.mockRestore();
@@ -1607,6 +1614,77 @@ describe('presenter built-in and custom pages', () => {
       }
       window.localStorage.clear();
     }
+  });
+
+  it('switches a standalone full-view lazy table between table and card-list modes', () => {
+    window.localStorage.clear();
+    const document = {
+      languageVersion: '0.1.0',
+      dashboard: {
+        id: 'mobile-table-card-dashboard',
+        title: 'Mobile Table Cards',
+        pages: [{
+          id: 'repositories',
+          kind: /** @type {'custom'} */ ('custom'),
+          title: 'Repositories',
+          views: [{
+            id: 'repositories-table',
+            title: 'Repositories',
+            data: { source: 'repositories' },
+            mark: 'table',
+            controls: 'interactive',
+            'lazy-list': true,
+            layout: 'full-view',
+            encoding: {
+              columns: [
+                { field: 'repository-coordinate', type: 'nominal' },
+                { field: 'organization', type: 'nominal' }
+              ]
+            }
+          }]
+        }],
+        'card-templates': [{
+          id: 'repository',
+          icon: 'repo',
+          title: { field: 'repository-coordinate' },
+          labels: [],
+          details: [{ field: 'organization' }]
+        }]
+      }
+    };
+    const rendered = renderDashboard({
+      document,
+      sources: {
+        repositories: {
+          source: 'repositories',
+          rows: [{ 'repository-coordinate': 'githubnext/gh-aw-cao', organization: 'githubnext' }],
+          metadata: {
+            'source-id': 'repositories-fixture',
+            'source-kind': 'fixture',
+            'as-of': '2026-09-16T10:00:00Z',
+            'retrieved-at': '2026-09-16T10:00:00Z',
+            availability: 'available',
+            completeness: 'complete',
+            freshness: 'fresh'
+          }
+        }
+      }
+    });
+    const toggle = /** @type {HTMLButtonElement | null} */ (rendered.querySelector('.mobile-view-mode-toggle'));
+
+    expect(rendered.dataset.mobileViewMode).toBe('table');
+    expect(toggle?.hidden).toBe(false);
+    expect(toggle?.getAttribute('aria-label')).toBe('Show card list view');
+    expect(rendered.querySelector('[data-mobile-card-list] .entity-card-list-card')?.textContent).toContain('githubnext/gh-aw-cao');
+
+    toggle?.click();
+    expect(rendered.dataset.mobileViewMode).toBe('card');
+    expect(toggle?.getAttribute('aria-label')).toBe('Show table view');
+    expect(toggle?.querySelector('.octicon-table')).not.toBeNull();
+
+    toggle?.click();
+    expect(rendered.dataset.mobileViewMode).toBe('table');
+    window.localStorage.clear();
   });
 
   it('renders a mobile view menu with full labels and closes it after selection', () => {
@@ -3794,6 +3872,132 @@ describe('presenter built-in and custom pages', () => {
       expect(page.getAttribute('aria-busy')).toBeNull();
       expect(page.querySelector('.empty')?.getAttribute('role')).toBe('alert');
     } finally {
+      root.remove();
+      window.history.replaceState(null, '', '/');
+    }
+  });
+
+  it('aborts the active page subscription when the dashboard is disposed', async () => {
+    /** @type {AbortSignal | undefined} */
+    let pageSignal;
+    const loadPageSources = vi.fn(async (_pageId, options) => {
+      pageSignal = options.signal;
+      return {};
+    });
+    const rendered = renderDashboard({
+      document: {
+        languageVersion: '0.1.0',
+        dashboard: {
+          id: 'disposable-dashboard',
+          title: 'Disposable Dashboard',
+          pages: [{
+            id: 'overview',
+            kind: /** @type {'custom'} */ ('custom'),
+            title: 'Overview',
+            views: []
+          }]
+        }
+      },
+      sources: {},
+      loadPageSources
+    });
+
+    await vi.waitFor(() => expect(pageSignal).toBeDefined());
+    expect(pageSignal?.aborted).toBe(false);
+
+    disposeDashboard(rendered);
+
+    expect(pageSignal?.aborted).toBe(true);
+  });
+
+  it('ignores a pending view transition after the dashboard is disposed', () => {
+    /** @type {(() => void) | undefined} */
+    let transitionUpdate;
+    Object.defineProperty(document, 'startViewTransition', {
+      configurable: true,
+      value: vi.fn((callback) => {
+        transitionUpdate = callback;
+        return { finished: Promise.resolve() };
+      })
+    });
+    const rendered = renderDashboard({
+      document: {
+        languageVersion: '0.1.0',
+        dashboard: {
+          id: 'transition-disposal-dashboard',
+          title: 'Transition Disposal Dashboard',
+          pages: [
+            { id: 'first', kind: /** @type {'custom'} */ ('custom'), title: 'First', views: [] },
+            { id: 'second', kind: /** @type {'custom'} */ ('custom'), title: 'Second', views: [] }
+          ]
+        }
+      },
+      sources: {}
+    });
+    document.body.append(rendered);
+    try {
+      /** @type {HTMLAnchorElement | null} */ (
+        rendered.querySelector('[data-nav-page-id="second"]')
+      )?.click();
+      expect(transitionUpdate).toBeDefined();
+
+      disposeDashboard(rendered);
+      transitionUpdate?.();
+
+      expect(rendered.querySelector('[data-page-id="second"]')?.hasAttribute('data-page-pending')).toBe(true);
+    } finally {
+      rendered.remove();
+      Reflect.deleteProperty(document, 'startViewTransition');
+      window.history.replaceState(null, '', '/');
+    }
+  });
+
+  it('removes page navigation handlers when navigation is disposed', async () => {
+    /** @type {FrameRequestCallback[]} */
+    const animationFrames = [];
+    const requestAnimationFrame = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      animationFrames.push(callback);
+      return animationFrames.length;
+    });
+    const root = document.createElement('div');
+    root.innerHTML = `
+      <a data-nav-page-id="first" href="#page-first">First</a>
+      <a data-nav-page-id="second" href="#page-second">Second</a>
+      <main class="dashboard-prototype">
+        <section class="dashboard-page" id="page-first" data-page-id="first" data-page-pending></section>
+        <section class="dashboard-page" id="page-second" data-page-id="second" data-page-pending></section>
+      </main>
+    `;
+    document.body.append(root);
+    const renderPage = vi.fn((pageId) => {
+      const page = document.createElement('section');
+      page.className = 'dashboard-page';
+      page.id = `page-${pageId}`;
+      page.dataset.pageId = pageId;
+      return page;
+    });
+    try {
+      const disposeNavigation = enableDashboardPageNavigation(root, 'Dashboard', renderPage, 'first');
+      expect(renderPage).toHaveBeenCalledOnce();
+
+      root.querySelector('[data-nav-page-id="second"]')?.dispatchEvent(
+        new MouseEvent('click', { bubbles: true, cancelable: true })
+      );
+      expect(animationFrames).toHaveLength(1);
+      disposeNavigation();
+      while (animationFrames.length > 0) {
+        animationFrames.shift()?.(0);
+      }
+      window.history.replaceState(null, '', '/#page-second');
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+      root.querySelector('[data-nav-page-id="second"]')?.dispatchEvent(
+        new MouseEvent('click', { bubbles: true, cancelable: true })
+      );
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 0));
+
+      expect(renderPage).toHaveBeenCalledOnce();
+    } finally {
+      requestAnimationFrame.mockRestore();
       root.remove();
       window.history.replaceState(null, '', '/');
     }
