@@ -102,6 +102,9 @@ test("builds deployable package and workflow inventory sources", () => {
           },
         },
       },
+      policy_resolution: { status: "available", reason: "" },
+      policy_document: { version: 1, "control-plane": { packages: { "daily-ops": { mode: "review" } } } },
+      policy_source: '{\n  "version": 1\n}\n',
     },
   });
 
@@ -165,6 +168,16 @@ test("builds deployable package and workflow inventory sources", () => {
       "observed-at": generatedAt,
     },
   );
+  assert.equal(sources["configuration-policy"].source, "configuration-policy");
+  assert.equal(sources["configuration-policy"].rows[0].path, ".github/workflows/cao.json");
+  assert.equal(sources["configuration-policy"].rows[0].document.version, 1);
+  assert.equal(sources["configuration-policy"].rows[0].raw, '{\n  "version": 1\n}\n');
+  assert.deepEqual(sources["configuration-policy"].rows[0].diagnostics, [{
+    severity: "valid",
+    path: ".github/workflows/cao.json",
+    title: "Policy is valid",
+    detail: "The runtime policy resolver accepted this revision.",
+  }]);
 });
 
 test("excludes internal packages from user-facing package inventory", () => {
@@ -181,6 +194,90 @@ test("excludes internal packages from user-facing package inventory", () => {
   });
 
   assert.deepEqual(sources.packages.rows, []);
+});
+
+test("inventory configuration policy source reports unavailable control policy resolution", () => {
+  const sources = buildInventoryDashboardSources({
+    repository: "githubnext/control",
+    generatedAt: "2026-09-11T00:00:00Z",
+    inventory: { bundles: [], workflows: [] },
+    controlSettings: {
+      policy_resolution: { status: "unavailable", reason: "policy file is invalid JSON" },
+      policy_document: null,
+      policy_source: "{",
+    },
+  });
+
+  assert.deepEqual(sources["configuration-policy"].rows, [{
+    path: ".github/workflows/cao.json",
+    document: null,
+    raw: "{",
+    diagnostics: [{
+      severity: "error",
+      path: ".github/workflows/cao.json",
+      title: "Policy validation failed",
+      detail: "policy file is invalid JSON",
+    }],
+  }]);
+});
+
+test("inventory configuration policy source stays empty when no policy was collected", () => {
+  const sources = buildInventoryDashboardSources({
+    repository: "githubnext/control",
+    generatedAt: "2026-09-11T00:00:00Z",
+    inventory: { bundles: [], workflows: [] },
+    controlSettings: {},
+  });
+
+  assert.deepEqual(sources["configuration-policy"].rows, []);
+});
+
+test("inventory sources tolerate null control settings", () => {
+  const sources = buildInventoryDashboardSources({
+    repository: "githubnext/control",
+    generatedAt: "2026-09-11T00:00:00Z",
+    inventory: { bundles: [], workflows: [] },
+    controlSettings: null,
+  });
+
+  assert.deepEqual(sources.packages.rows, []);
+  assert.deepEqual(sources["configuration-policy"].rows, []);
+});
+
+test("inventory sources tolerate non-object control settings", () => {
+  const sources = buildInventoryDashboardSources({
+    repository: "githubnext/control",
+    generatedAt: "2026-09-11T00:00:00Z",
+    inventory: { bundles: [], workflows: [] },
+    controlSettings: "not-collected",
+  });
+
+  assert.deepEqual(sources.packages.rows, []);
+  assert.deepEqual(sources["configuration-policy"].rows, []);
+});
+
+test("inventory configuration policy source distinguishes collected unvalidated policy", () => {
+  const sources = buildInventoryDashboardSources({
+    repository: "githubnext/control",
+    generatedAt: "2026-09-11T00:00:00Z",
+    inventory: { bundles: [], workflows: [] },
+    controlSettings: {
+      policy_document: null,
+      policy_source: "",
+    },
+  });
+
+  assert.deepEqual(sources["configuration-policy"].rows, [{
+    path: ".github/workflows/cao.json",
+    document: null,
+    raw: "",
+    diagnostics: [{
+      severity: "warning",
+      path: ".github/workflows/cao.json",
+      title: "Policy validation status unavailable",
+      detail: "The control policy was collected but not validated.",
+    }],
+  }]);
 });
 
 test("includes registered packages that have no inventory or run history", () => {
