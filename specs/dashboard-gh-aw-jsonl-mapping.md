@@ -300,37 +300,6 @@ context envelope does not represent an additional Run.
 Issue titles, bodies, comments, and open or closed state MUST NOT establish
 acceptance, implementation, disposition, or lineage.
 
-The Activity collector MAY append a schema-v2
-`token_efficiency_comparison_observation` envelope only from a validated
-`token-efficiency-verification-claim` artifact produced by
-`optimization-token-efficiency-verifier`. The deterministic processor SHALL
-join the claim to exactly one latest authoritative applied implementation, the
-frozen opportunity, retained target `run` envelopes, and the verifier Run
-attempt. It SHALL derive the contract and baseline from the frozen opportunity,
-derive optimized-window start and maturity from authoritative implementation
-completion, and use the claim cutoff only as a temporal selector no later than
-the verifier Run. Target attempts SHALL be discovered by exact Repository,
-Workflow path, `run.experiments.assignments`, variant, and window. Their
-full schema-version-4 operational-value results retained from immutable
-`grader_results.json` artifacts as
-`token_efficiency_operational_value_observation` envelopes SHALL provide
-accepted-outcome identity and quality only when their source or ID is
-`operational-value`, evaluator digest matches, evidence is mature and no later
-than cutoff, status is accepted/pass, and value is finite. The compact gh-aw
-Run projection is not evaluator authority because it omits implementation
-digest and maturity metadata. Missing or malformed grader evidence fails
-closed; valid non-accepted outcomes remain separate from Run reliability and
-do not enter the accepted-outcome denominator. Claim
-payloads are selectors, not measurement authority: Run AIC, token classes,
-conclusions, timestamps, outcome acceptance, quality, and overhead SHALL come
-from the resolved Activity records. It SHALL reject unmatured, future-cutoff,
-identity-changing, missing, or conflicting claims, preserve incomplete or
-incomparable matured evidence as inconclusive, and emit one comparison Event
-plus one append-only lifecycle Event. It SHALL retain a
-`token_efficiency_run_context` for the verifier Run so the comparison survives
-ordinary Activity-window pruning. Replaying one evaluator digest and evidence
-cutoff SHALL deduplicate; a later cutoff SHALL append a new comparison.
-
 ## 6 `github_api_rate_limit` envelope
 
 Each `github_api_rate_limit` envelope SHALL map to one Event:

@@ -53,16 +53,6 @@ test("orchestrator dispatches verifier only from matured applied Activity eviden
 test("Activity owns comparison publication and append-only retention", () => {
   const collector = readFileSync(join(root, "activity", "collect-logs.sh"), "utf8");
   const manifest = readFileSync(join(root, "activity", "aw.yml"), "utf8");
-  const mapping = JSON.parse(readFileSync(join(
-    root,
-    "dashboard",
-    "site",
-    "src",
-    "data",
-    "ingest",
-    "expressions",
-    "gh-aw-logs-v2.json",
-  ), "utf8"));
 
   assert.match(collector, /name=token-efficiency-verification-claim/);
   assert.match(collector, /token-efficiency-comparisons\.jsonl/);
@@ -71,32 +61,4 @@ test("Activity owns comparison publication and append-only retention", () => {
   assert.match(collector, /--history-file "\$comparison_tmp"/);
   assert.match(manifest, /token-efficiency-verifier\.mjs/);
   assert.match(manifest, /token-efficiency-grader-evidence\.mjs/);
-  assert.deepEqual(
-    mapping.variants.token_efficiency_comparison_observation.identity,
-    ["verifierRunId", "verifierRunAttempt", "comparisonId"],
-  );
-});
-
-test("comparison source is declarative and contains no JavaScript business derivation", () => {
-  const dashboard = JSON.parse(readFileSync(join(root, "dashboard", "site", "dashboard.json"), "utf8"));
-  const query = dashboard.dashboard.queries.find(({ name }) =>
-    name === "token-efficiency-comparisons");
-  const source = readFileSync(join(
-    root,
-    "dashboard",
-    "site",
-    "src",
-    "data",
-    "queries",
-    "view-sources.js",
-  ), "utf8");
-
-  assert.equal(query.from, "events");
-  assert.deepEqual(query.filter.predicates, [{
-    field: "event-type",
-    equals: "token_efficiency.comparison",
-  }]);
-  assert.ok(query.select.some(({ field }) => field === "verified-net-gain"));
-  assert.ok(query["order-by"].some(({ field }) => field === "evidence-cutoff"));
-  assert.doesNotMatch(source, /tokenEfficiencyComparisons|tokenEfficiencyComparisonSource/);
 });

@@ -19,8 +19,7 @@
                 ".github/workflows/optimization-ai-credit-auditor.md",
                 ".github/workflows/optimization-ai-credit-optimizer.md",
                 ".github/workflows/optimization-agents-md-curator.md",
-                ".github/workflows/optimization-skills-curator.md",
-                ".github/workflows/optimization-token-efficiency-verifier.md"
+                ".github/workflows/optimization-skills-curator.md"
               ]
             }
           ]
@@ -62,8 +61,7 @@
               "in": [
                 ".github/workflows/optimization-ai-credit-auditor.md",
                 ".github/workflows/optimization-ai-credit-optimizer.md",
-                ".github/workflows/optimization-agents-md-curator.md",
-                ".github/workflows/optimization-token-efficiency-verifier.md"
+                ".github/workflows/optimization-agents-md-curator.md"
               ]
             }
           ]
@@ -99,8 +97,7 @@
                   ".github/workflows/optimization-ai-credit-auditor.md",
                   ".github/workflows/optimization-ai-credit-optimizer.md",
                   ".github/workflows/optimization-agents-md-curator.md",
-                  ".github/workflows/optimization-skills-curator.md",
-                  ".github/workflows/optimization-token-efficiency-verifier.md"
+                  ".github/workflows/optimization-skills-curator.md"
                 ]
               }
             },
@@ -196,8 +193,7 @@
                 "workflow": [
                   ".github/workflows/optimization-ai-credit-auditor.md",
                   ".github/workflows/optimization-ai-credit-optimizer.md",
-                  ".github/workflows/optimization-agents-md-curator.md",
-                  ".github/workflows/optimization-token-efficiency-verifier.md"
+                  ".github/workflows/optimization-agents-md-curator.md"
                 ]
               },
               "limit": 50
@@ -261,8 +257,7 @@
                 "workflow": [
                   ".github/workflows/optimization-ai-credit-auditor.md",
                   ".github/workflows/optimization-ai-credit-optimizer.md",
-                  ".github/workflows/optimization-agents-md-curator.md",
-                  ".github/workflows/optimization-token-efficiency-verifier.md"
+                  ".github/workflows/optimization-agents-md-curator.md"
                 ]
               }
             },

@@ -750,10 +750,6 @@ function createCachedGhAwJsonlAccumulator(options) {
   const tokenEfficiencyObservationsByRun = new Map();
   /** @type {Map<string, Record<string, unknown>[]>} */
   const tokenEfficiencyLifecycleObservationsByRun = new Map();
-  /** @type {Map<string, Record<string, unknown>[]>} */
-  const tokenEfficiencyComparisonObservationsByRun = new Map();
-  /** @type {Map<string, Record<string, unknown>[]>} */
-  const tokenEfficiencyOperationalValuesByRun = new Map();
   /** @type {Map<string, string>} */
   const latestRunByGithubId = new Map();
   /** @type {Map<string, CachedRun>} */
@@ -811,25 +807,6 @@ function createCachedGhAwJsonlAccumulator(options) {
       tokenEfficiencyObservationsByRun.set(optimizerRunKey, observations);
       return;
     }
-    if (envelope.kind === 'token_efficiency_operational_value_observation') {
-      const observation = objectValue(
-        envelope.observation,
-        `gh-aw JSONL line ${line}.observation`
-      );
-      const githubRunId = identifier(
-        observation.runId,
-        `gh-aw JSONL line ${line}.observation.runId`
-      );
-      const attempt = positiveInteger(
-        observation.runAttempt ?? 1,
-        `gh-aw JSONL line ${line}.observation.runAttempt`
-      );
-      const key = runId(githubRunId, attempt);
-      const observations = tokenEfficiencyOperationalValuesByRun.get(key) ?? [];
-      observations.push(observation);
-      tokenEfficiencyOperationalValuesByRun.set(key, observations);
-      return;
-    }
     if (envelope.kind === 'token_efficiency_lifecycle_observation') {
       const observation = objectValue(
         envelope.observation,
@@ -847,25 +824,6 @@ function createCachedGhAwJsonlAccumulator(options) {
       const observations = tokenEfficiencyLifecycleObservationsByRun.get(optimizerRunKey) ?? [];
       observations.push({ ...observation, __line: line });
       tokenEfficiencyLifecycleObservationsByRun.set(optimizerRunKey, observations);
-      return;
-    }
-    if (envelope.kind === 'token_efficiency_comparison_observation') {
-      const observation = objectValue(
-        envelope.observation,
-        `gh-aw JSONL line ${line}.observation`
-      );
-      const verifierRunId = identifier(
-        observation.verifierRunId,
-        `gh-aw JSONL line ${line}.observation.verifierRunId`
-      );
-      const verifierRunAttempt = positiveInteger(
-        observation.verifierRunAttempt,
-        `gh-aw JSONL line ${line}.observation.verifierRunAttempt`
-      );
-      const verifierRunKey = runId(verifierRunId, verifierRunAttempt);
-      const observations = tokenEfficiencyComparisonObservationsByRun.get(verifierRunKey) ?? [];
-      observations.push({ ...observation, __line: line });
-      tokenEfficiencyComparisonObservationsByRun.set(verifierRunKey, observations);
       return;
     }
     if (envelope.kind === 'run' || envelope.kind === 'token_efficiency_run_context') {
@@ -1293,19 +1251,9 @@ function createCachedGhAwJsonlAccumulator(options) {
     const graders = run.graders && typeof run.graders === 'object' && !Array.isArray(run.graders)
       ? /** @type {Record<string, unknown>} */ (run.graders)
       : {};
-    const compactGraderResults = Array.isArray(graders.results)
+    const graderResults = Array.isArray(graders.results)
       ? graders.results
       : [];
-    const retainedOperationalValues = (tokenEfficiencyOperationalValuesByRun.get(id) ?? [])
-      .map((observation) => observation.result)
-      .filter((result) => result && typeof result === 'object' && !Array.isArray(result));
-    const graderResults = retainedOperationalValues.length === 0
-      ? compactGraderResults
-      : [
-          ...compactGraderResults.filter((result) =>
-            result?.id !== 'operational-value' && result?.source !== 'operational-value'),
-          ...retainedOperationalValues
-        ];
     graderResults.forEach((grader, index) => {
       const record = grader && typeof grader === 'object' && !Array.isArray(grader)
         ? /** @type {Record<string, unknown>} */ (grader)
@@ -1491,7 +1439,7 @@ function createCachedGhAwJsonlAccumulator(options) {
       const evidenceState = enumValue(
         lifecycle.evidenceState,
         'token lifecycle evidenceState',
-        ['complete', 'incomplete', 'incomparable', 'unavailable']
+        ['complete', 'incomplete', 'unavailable']
       );
       emitEvent(
         'token_efficiency.intervention',
@@ -1553,7 +1501,6 @@ function createCachedGhAwJsonlAccumulator(options) {
           rejectedAt: optionalTimestamp(lifecycle.rejectedAt, 'token lifecycle rejectedAt'),
           supersededAt: optionalTimestamp(lifecycle.supersededAt, 'token lifecycle supersededAt'),
           supersededByInterventionId: optionalString(lifecycle.supersededByInterventionId),
-          verificationComparisonId: optionalString(lifecycle.verificationComparisonId),
           claimRunId: identifier(lifecycle.claimRunId, 'token lifecycle claimRunId'),
           claimRunAttempt: positiveInteger(
             lifecycle.claimRunAttempt,
@@ -1565,151 +1512,6 @@ function createCachedGhAwJsonlAccumulator(options) {
             'token lifecycle sourceProvenance'
           ),
           payloadRef: `gh-aw-logs-shards#L${String(lifecycle.__line)}`
-        }
-      );
-    }
-    for (const comparison of tokenEfficiencyComparisonObservationsByRun.get(id) ?? []) {
-      const observed = canonicalTimestamp(
-        comparison.observedAt,
-        'token efficiency comparison observedAt'
-      );
-      const targetRepo = requiredString(
-        comparison.targetRepo,
-        'token efficiency comparison targetRepo'
-      ).toLowerCase();
-      if (!REPOSITORY_COORDINATE_PATTERN.test(targetRepo)) {
-        throw new TypeError('token efficiency comparison targetRepo must be an owner/repository coordinate');
-      }
-      const targetCoordinates = repositoryCoordinates(targetRepo);
-      const evidenceState = enumValue(
-        comparison.evidenceState,
-        'token efficiency comparison evidenceState',
-        ['complete', 'incomplete', 'incomparable', 'unmatured', 'unavailable']
-      );
-      emitEvent(
-        'token_efficiency.comparison',
-        observed,
-        optionalString(comparison.missingReason) ?? 'Token-efficiency comparison observed',
-        evidenceState,
-        {
-          type: 'token-efficiency-comparison',
-          comparisonId: comparison.comparisonId
-        },
-        {
-          source: 'token-efficiency-verifier',
-          targetRepo,
-          targetOrganization: targetCoordinates.owner,
-          targetRepository: targetCoordinates.name,
-          targetWorkflowPath: requiredString(
-            comparison.workflowPath,
-            'token efficiency comparison workflowPath'
-          ),
-          opportunityId: requiredString(
-            comparison.opportunityId,
-            'token efficiency comparison opportunityId'
-          ),
-          interventionId: requiredString(
-            comparison.interventionId,
-            'token efficiency comparison interventionId'
-          ),
-          comparisonId: requiredString(
-            comparison.comparisonId,
-            'token efficiency comparison comparisonId'
-          ),
-          implementationChangeId: requiredString(
-            comparison.implementationChangeId,
-            'token efficiency comparison implementationChangeId'
-          ),
-          verifierRunAttempt: positiveInteger(
-            comparison.verifierRunAttempt,
-            'token efficiency comparison verifierRunAttempt'
-          ),
-          verifierWorkflowPath: requiredString(
-            comparison.verifierWorkflowPath,
-            'token efficiency comparison verifierWorkflowPath'
-          ),
-          verifierWorkflowName: requiredString(
-            comparison.verifierWorkflowName,
-            'token efficiency comparison verifierWorkflowName'
-          ),
-          experimentId: requiredString(
-            comparison.experimentId,
-            'token efficiency comparison experimentId'
-          ),
-          evaluatorDigest: requiredString(
-            comparison.evaluatorDigest,
-            'token efficiency comparison evaluatorDigest'
-          ),
-          evidenceState,
-          missingReason: optionalString(comparison.missingReason),
-          costGrain: enumValue(
-            comparison.costGrain,
-            'token efficiency comparison costGrain',
-            ['invocation', 'run-aggregate']
-          ),
-          controlVariant: requiredString(
-            comparison.controlVariant,
-            'token efficiency comparison controlVariant'
-          ),
-          optimizedVariant: requiredString(
-            comparison.optimizedVariant,
-            'token efficiency comparison optimizedVariant'
-          ),
-          baselineWindow: comparison.baselineWindow,
-          optimizedWindow: comparison.optimizedWindow,
-          sourceGenerations: comparison.sourceGenerations,
-          baselineAicPerAcceptedOutcome: finiteNumber(
-            comparison.baselineAicPerAcceptedOutcome
-          ),
-          optimizedAicPerAcceptedOutcome: finiteNumber(
-            comparison.optimizedAicPerAcceptedOutcome
-          ),
-          baselineAcceptedTargetOutcomeCount: finiteNumber(
-            comparison.baselineAcceptedTargetOutcomeCount
-          ),
-          optimizedAcceptedTargetOutcomeCount: finiteNumber(
-            comparison.optimizedAcceptedTargetOutcomeCount
-          ),
-          acceptedTargetOutcomeCount: finiteNumber(
-            comparison.acceptedTargetOutcomeCount
-          ),
-          baselineFailureRate: finiteNumber(comparison.baselineFailureRate),
-          optimizedFailureRate: finiteNumber(comparison.optimizedFailureRate),
-          outcomeQualityPreserved: typeof comparison.outcomeQualityPreserved === 'boolean'
-            ? comparison.outcomeQualityPreserved
-            : undefined,
-          reliabilityPreserved: typeof comparison.reliabilityPreserved === 'boolean'
-            ? comparison.reliabilityPreserved
-            : undefined,
-          grossRealizedSavingsAic: finiteNumber(comparison.grossRealizedSavingsAic),
-          optimizationOverheadAic: finiteNumber(comparison.optimizationOverheadAic),
-          netRealizedSavingsAic: finiteNumber(comparison.netRealizedSavingsAic),
-          verifiedNetGain: finiteNumber(comparison.verifiedNetGain),
-          attributableOverheadRunIds: comparison.attributableOverheadRunIds,
-          baselineInputTokens: finiteNumber(comparison.baselineInputTokens),
-          optimizedInputTokens: finiteNumber(comparison.optimizedInputTokens),
-          baselineOutputTokens: finiteNumber(comparison.baselineOutputTokens),
-          optimizedOutputTokens: finiteNumber(comparison.optimizedOutputTokens),
-          baselineCacheReadTokens: finiteNumber(comparison.baselineCacheReadTokens),
-          optimizedCacheReadTokens: finiteNumber(comparison.optimizedCacheReadTokens),
-          baselineCacheWriteTokens: finiteNumber(comparison.baselineCacheWriteTokens),
-          optimizedCacheWriteTokens: finiteNumber(comparison.optimizedCacheWriteTokens),
-          baselineReasoningTokens: finiteNumber(comparison.baselineReasoningTokens),
-          optimizedReasoningTokens: finiteNumber(comparison.optimizedReasoningTokens),
-          maturityAt: canonicalTimestamp(
-            comparison.maturityAt,
-            'token efficiency comparison maturityAt'
-          ),
-          maturityStatus: requiredString(
-            comparison.maturityStatus,
-            'token efficiency comparison maturityStatus'
-          ),
-          evidenceCutoff: canonicalTimestamp(
-            comparison.evidenceCutoff,
-            'token efficiency comparison evidenceCutoff'
-          ),
-          evidenceLinks: comparison.evidenceLinks,
-          payloadRef: `gh-aw-logs-shards#L${String(comparison.__line)}`
         }
       );
     }
@@ -1876,13 +1678,6 @@ function createCachedGhAwJsonlAccumulator(options) {
   if (unmatchedLifecycleRuns.length > 0) {
     throw new TypeError(
       `Token lifecycle observations require retained optimizer runs: ${unmatchedLifecycleRuns.join(', ')}`
-    );
-  }
-  const unmatchedComparisonRuns = [...tokenEfficiencyComparisonObservationsByRun.keys()]
-    .filter((id) => !runIds.has(id));
-  if (unmatchedComparisonRuns.length > 0) {
-    throw new TypeError(
-      `Token efficiency comparisons require retained verifier runs: ${unmatchedComparisonRuns.join(', ')}`
     );
   }
 

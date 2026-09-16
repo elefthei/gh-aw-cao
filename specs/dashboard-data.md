@@ -672,12 +672,8 @@ The IndexedDB Event representation SHALL use camel-case fields:
 `optimizationOverheadAic`, `netRealizedSavingsAic`, `verifiedNetGain`,
 `recommendationChurnCount`, `recommendationChurnRate`,
 `baselineAicPerAcceptedOutcome`, `optimizedAicPerAcceptedOutcome`,
-`baselineAcceptedTargetOutcomeCount`, `optimizedAcceptedTargetOutcomeCount`,
 `acceptedTargetOutcomeCount`, `baselineFailureRate`, `optimizedFailureRate`,
-`outcomeQualityPreserved`, `reliabilityPreserved`, and separate baseline and
-optimized `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`,
-and `reasoningTokens` fields, plus the relationship IDs applicable to that
-Event. No total-token field is permitted.
+`outcomeQualityPreserved`, and the relationship IDs applicable to that Event.
 
 The `gh-aw-cao.dashboard-sql-export` representation SHALL emit the same Events
 with equivalent snake-case columns. Each SQL-export row SHALL retain
