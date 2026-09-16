@@ -129,6 +129,10 @@
           },
           "skills-curator": {
             "workflow": "optimization-skills-curator"
+          },
+          "token-optimizer": {
+            "workflow": "optimization-token-optimizer",
+            "max-mode": "review"
           }
         }
       },

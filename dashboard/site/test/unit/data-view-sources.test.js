@@ -399,6 +399,100 @@ describe('canonical view sources', () => {
     ]);
   });
 
+  it('projects token optimizer artifacts without parsing issue display text', async () => {
+    const records = [
+      {
+        schema_version: 2,
+        kind: 'run',
+        run: {
+          run_id: 1186001,
+          run_attempt: 1,
+          organization: 'githubnext',
+          repository: 'githubnext/gh-aw-cao',
+          workflow_name: 'AW Optimization / Token Optimizer',
+          workflow_path: '.github/workflows/optimization-token-optimizer.md',
+          status: 'completed',
+          conclusion: 'success',
+          created_at: '2026-09-15T04:00:00Z',
+          updated_at: '2026-09-15T04:02:00Z'
+        }
+      },
+      {
+        schema_version: 2,
+        kind: 'safe_output_item',
+        safe_output: {
+          run_id: 1186001,
+          type: 'create_issue',
+          url: 'https://github.com/githubnext/gh-aw-cao/issues/11861',
+          number: 11861,
+          repo: 'githubnext/gh-aw-cao',
+          timestamp: '2026-09-15T04:02:00Z'
+        }
+      },
+      {
+        schema_version: 2,
+        kind: 'token_efficiency_observation',
+        observation: {
+          schemaVersion: 1,
+          observedAt: '2026-09-15T04:02:00Z',
+          controlRepository: 'githubnext/gh-aw-cao',
+          optimizerRunId: '1186001',
+          runAttempt: 1,
+          targetRepo: 'octo/example',
+          workflowPath: '.github/workflows/review.md',
+          evidenceWindowStart: '2026-09-01T00:00:00Z',
+          evidenceWindowEnd: '2026-09-08T00:00:00Z',
+          assignmentRunId: '1185999',
+          experimentId: 'review-context-v1',
+          opportunityKind: 'unbounded-context-growth',
+          opportunityId: 'token-opportunity:octo/example:.github/workflows/review.md:2026-09-01T00:00:00Z:2026-09-08T00:00:00Z:1185999:review-context-v1',
+          evidenceState: 'complete',
+          evidenceConfidence: 0.9,
+          costGrain: 'invocation',
+          evidenceProvenance: [{ source: 'activity', runId: '42', costGrain: 'invocation' }],
+          interventionId: 'token-intervention:review-context-v1:1186001',
+          interventionState: 'proposed',
+          recommendationDisposition: 'unapplied',
+          controlVariant: 'control',
+          optimizedVariant: 'optimized',
+          proposedSavingsAic: 12.5,
+          attributableRunIds: ['1185999', '1186001']
+        }
+      }
+    ];
+    await ingestCachedGhAwJsonl(indexedDB, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`, {
+      now: Date.parse('2026-09-15T05:00:00Z')
+    });
+
+    const projected = await queryCanonicalViewSources(
+      indexedDB,
+      {},
+      ['token-efficiency-opportunities', 'token-efficiency-interventions']
+    );
+
+    expect(projected['token-efficiency-opportunities'].rows).toEqual([
+      expect.objectContaining({
+        organization: 'octo',
+        repository: 'example',
+        workflow: '.github/workflows/review.md',
+        'opportunity-kind': 'unbounded-context-growth',
+        'assignment-run': '1185999',
+        'evidence-state': 'complete',
+        'cost-grain': 'invocation'
+      })
+    ]);
+    expect(projected['token-efficiency-interventions'].rows).toEqual([
+      expect.objectContaining({
+        organization: 'octo',
+        repository: 'example',
+        'intervention-state': 'proposed',
+        'recommendation-disposition': 'unapplied',
+        'proposed-savings-aic': 12.5,
+        'issue-link': 'https://github.com/githubnext/gh-aw-cao/issues/11861'
+      })
+    ]);
+  });
+
   it('projects sessions with run and repository context even when events are not requested', async () => {
     await loadCanonicalViewSources(indexedDB, collection('generation-a', sources.events.rows), { ingest: true });
 

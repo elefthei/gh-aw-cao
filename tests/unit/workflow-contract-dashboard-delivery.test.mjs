@@ -26,6 +26,7 @@ test("shared activity cache restores into activation and agent jobs", () => {
     "cao-evolution-failures-investigator.md",
     "optimization-ai-credit-auditor.md",
     "optimization-ai-credit-optimizer.md",
+    "optimization-token-optimizer.md",
     "self-care-open-source-failures.md",
   ]) {
     assert.match(workflow(name), /uses: shared\/activity-cache\.md/, name);
@@ -536,6 +537,7 @@ test("Dashboard inventory links multiline orchestrator worker lists", () => {
           "optimization-ai-credit-optimizer",
           "optimization-agents-md-curator",
           "optimization-skills-curator",
+          "optimization-token-optimizer",
         ],
       },
       {

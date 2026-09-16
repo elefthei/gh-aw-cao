@@ -723,6 +723,8 @@ function createCachedGhAwJsonlAccumulator(options) {
   const rateLimitEnvelopes = [];
   /** @type {Map<string, { value: Record<string, unknown>, line: number }[]>} */
   const safeOutputItemsByRun = new Map();
+  /** @type {Map<string, Record<string, unknown>[]>} */
+  const tokenEfficiencyObservationsByRun = new Map();
   /** @type {Map<string, string>} */
   const latestRunByGithubId = new Map();
   /** @type {Map<string, CachedRun>} */
@@ -759,6 +761,20 @@ function createCachedGhAwJsonlAccumulator(options) {
         items.push({ value: safeOutput, line });
         safeOutputItemsByRun.set(parentRunId, items);
       }
+      return;
+    }
+    if (envelope.kind === 'token_efficiency_observation') {
+      const observation = objectValue(
+        envelope.observation,
+        `gh-aw JSONL line ${line}.observation`
+      );
+      const optimizerRunId = identifier(
+        observation.optimizerRunId,
+        `gh-aw JSONL line ${line}.observation.optimizerRunId`
+      );
+      const observations = tokenEfficiencyObservationsByRun.get(optimizerRunId) ?? [];
+      observations.push({ ...observation, __line: line });
+      tokenEfficiencyObservationsByRun.set(optimizerRunId, observations);
       return;
     }
     if (envelope.kind === 'run') {
@@ -1218,6 +1234,70 @@ function createCachedGhAwJsonlAccumulator(options) {
         }
       );
     });
+    for (const tokenObservation of tokenEfficiencyObservationsByRun.get(String(run.run_id)) ?? []) {
+      const observed = timestamp(tokenObservation.observedAt) ?? completedAt ?? enriched.observedAt;
+      const targetRepo = requiredString(tokenObservation.targetRepo, 'token observation targetRepo').toLowerCase();
+      if (!REPOSITORY_COORDINATE_PATTERN.test(targetRepo)) continue;
+      const targetWorkflowPath = requiredString(
+        tokenObservation.workflowPath,
+        'token observation workflowPath'
+      );
+      const opportunityId = requiredString(
+        tokenObservation.opportunityId,
+        'token observation opportunityId'
+      );
+      const interventionId = requiredString(
+        tokenObservation.interventionId,
+        'token observation interventionId'
+      );
+      emitEvent(
+        'token_efficiency.opportunity',
+        observed,
+        optionalString(tokenObservation.opportunityKind) ?? 'Token-efficiency opportunity',
+        optionalString(tokenObservation.evidenceState) ?? 'unavailable',
+        { type: 'token-efficiency-opportunity', opportunityId },
+        {
+          source: 'token-optimizer-observation',
+          targetRepo,
+          targetWorkflowPath,
+          opportunityId,
+          opportunityKind: optionalString(tokenObservation.opportunityKind),
+          assignmentRunId: optionalString(tokenObservation.assignmentRunId),
+          experimentId: optionalString(tokenObservation.experimentId),
+          evidenceWindowStart: optionalString(tokenObservation.evidenceWindowStart),
+          evidenceWindowEnd: optionalString(tokenObservation.evidenceWindowEnd),
+          evidenceState: optionalString(tokenObservation.evidenceState),
+          evidenceConfidence: finiteNumber(tokenObservation.evidenceConfidence),
+          costGrain: optionalString(tokenObservation.costGrain),
+          evidenceProvenance: tokenObservation.evidenceProvenance,
+          payloadRef: `gh-aw-logs-shards#L${String(tokenObservation.__line)}`
+        }
+      );
+      emitEvent(
+        'token_efficiency.intervention',
+        observed,
+        optionalString(tokenObservation.opportunityKind) ?? 'Token-efficiency intervention',
+        optionalString(tokenObservation.interventionState) ?? 'proposed',
+        { type: 'token-efficiency-intervention', interventionId },
+        {
+          source: 'token-optimizer-observation',
+          targetRepo,
+          targetWorkflowPath,
+          opportunityId,
+          interventionId,
+          interventionState: optionalString(tokenObservation.interventionState),
+          recommendationDisposition: optionalString(tokenObservation.recommendationDisposition),
+          supersedesInterventionId: optionalString(tokenObservation.supersedesInterventionId),
+          supersededByInterventionId: optionalString(tokenObservation.supersededByInterventionId),
+          experimentId: optionalString(tokenObservation.experimentId),
+          controlVariant: optionalString(tokenObservation.controlVariant),
+          optimizedVariant: optionalString(tokenObservation.optimizedVariant),
+          proposedSavingsAic: finiteNumber(tokenObservation.proposedSavingsAic),
+          attributableRunIds: tokenObservation.attributableRunIds,
+          payloadRef: `gh-aw-logs-shards#L${String(tokenObservation.__line)}`
+        }
+      );
+    }
     const audit = run.audit && typeof run.audit === 'object' && !Array.isArray(run.audit)
       ? /** @type {Record<string, unknown>} */ (run.audit)
       : {};

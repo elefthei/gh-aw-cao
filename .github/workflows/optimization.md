@@ -63,7 +63,7 @@ imports:
       role: orchestrator
       dispatch_max: 20
       orchestrator_credits: 250
-      worker_credits_per_target: 1650
+      worker_credits_per_target: 1950
 
 permissions:
   contents: read
@@ -84,7 +84,7 @@ network:
 
 safe-outputs:
   dispatch-workflow:
-    workflows: [optimization-ai-credit-auditor, optimization-ai-credit-optimizer, optimization-agents-md-curator, optimization-skills-curator]
+    workflows: [optimization-ai-credit-auditor, optimization-ai-credit-optimizer, optimization-agents-md-curator, optimization-skills-curator, optimization-token-optimizer]
     max: 20
   threat-detection: false
 
@@ -107,8 +107,9 @@ Deprioritize repositories with neither Agentic Workflow definitions nor a root `
 - `optimization-ai-credit-optimizer`: reads 7-day run aggregates and repo-memory history; publishes recommendations for the highest-impact workflow not recently optimized.
 - `optimization-agents-md-curator`: reads a repository's root `AGENTS.md`, git history, and merged pull request and review-comment history; files one issue containing an agentic prompt for a small, evidence-backed update.
 - `optimization-skills-curator`: reads agent skills, agent definitions, and their in-repository references; files one issue containing an agentic prompt that improves the layering between `AGENTS.md` and skills.
+- `optimization-token-optimizer`: consumes one frozen evidence-complete repository/workflow/experiment assignment, deterministically rejects incomplete or duplicate work, and publishes at most one review-only recommendation with canonical opportunity and intervention lineage.
 
-Dispatch stays repository-scoped: one dispatch per selected repository and eligible worker. The ambient-context workers apply their existing 10 percent gain gate before publishing and return a `noop` when the estimated reduction in always-loaded context is smaller.
+Dispatch stays repository-scoped: one dispatch per selected repository and eligible worker. Dispatch `optimization-token-optimizer` only with all of its frozen assignment inputs; do not ask it to discover an opportunity. The ambient-context workers apply their existing 10 percent gain gate before publishing and return a `noop` when the estimated reduction in always-loaded context is smaller.
 
 ## Completion
 

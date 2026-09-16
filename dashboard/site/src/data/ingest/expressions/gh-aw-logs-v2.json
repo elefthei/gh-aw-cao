@@ -19,6 +19,11 @@
       "emits": ["event"],
       "identity": ["run_id", "type", "url", "timestamp"]
     },
+    "token_efficiency_observation": {
+      "payloadPath": "observation",
+      "emits": ["event"],
+      "identity": ["optimizerRunId", "runAttempt", "opportunityId", "interventionId"]
+    },
     "github_api_rate_limit": {
       "payloadPath": "rate_limit",
       "emits": ["event"],

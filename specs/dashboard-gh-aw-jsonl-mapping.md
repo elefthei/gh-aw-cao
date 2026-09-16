@@ -263,6 +263,22 @@ observedAt
 provenance
 ```
 
+The Activity collector MAY append a schema-v2
+`token_efficiency_observation` envelope only from the validated
+`token-efficiency-observation` Actions artifact produced by
+`optimization-token-optimizer`. The envelope SHALL join to the preceding
+canonical Run by `observation.optimizerRunId` and SHALL emit exactly one
+`token_efficiency.opportunity` Event and one `token_efficiency.intervention`
+Event. These Events MAY additionally retain the Section 5.5 identity,
+evidence, state, disposition, variant, proposed-savings, supersession, and
+attributable-Run fields needed by their Dashboard Language projections.
+
+The artifact is the authoritative structured boundary for those fields. The
+collector and adapter MUST NOT reconstruct opportunity identity, intervention
+identity, disposition, or supersession from issue titles, bodies, comments, or
+other display text. A matching `safe_output_item` MAY supply only the resulting
+issue link by same-Run correlation.
+
 ## 6 `github_api_rate_limit` envelope
 
 Each `github_api_rate_limit` envelope SHALL map to one Event:

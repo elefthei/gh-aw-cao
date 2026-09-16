@@ -75,6 +75,62 @@ for target_repository in "${repositories[@]}"; do
   fi
 done
 
+observation_shard="$shard_directory/token-efficiency-observations.jsonl"
+observation_tmp="$observation_shard.tmp"
+: > "$observation_tmp"
+observation_complete=false
+if [[ $exit_code -eq 0 ]]; then
+  set +e
+  gh api "repos/$repository/actions/artifacts?name=token-efficiency-observation&per_page=$run_limit" \
+    --jq '.artifacts[]
+      | select(.expired == false and .name == "token-efficiency-observation")
+      | select((now - (.created_at | fromdateiso8601)) <= ('"$window_days"' * 86400))
+      | [.id, .workflow_run.id, .archive_download_url, .created_at]
+      | @tsv' \
+    | while IFS=$'\t' read -r artifact_id workflow_run_id archive_url created_at; do
+        [[ -n "$artifact_id" && -n "$workflow_run_id" && -n "$archive_url" ]] || continue
+        workflow_path="$(gh api "repos/$repository/actions/runs/$workflow_run_id" --jq '.path' 2>/dev/null || true)"
+        [[ "$workflow_path" == ".github/workflows/optimization-token-optimizer.lock.yml" ]] || continue
+        archive="$output_directory/token-efficiency-observation-$artifact_id.zip"
+        extracted="$output_directory/token-efficiency-observation-$artifact_id"
+        if ! gh api "$archive_url" > "$archive"; then
+          exit 1
+        fi
+        mkdir -p "$extracted"
+        if ! unzip -qq -o "$archive" -d "$extracted"; then
+          exit 1
+        fi
+        file="$extracted/token-efficiency-observation.json"
+        if jq -e --arg run "$workflow_run_id" --arg repository "$repository" '
+            .schemaVersion == 1
+            and .optimizerRunId == $run
+            and .controlRepository == $repository
+            and (.targetRepo | type == "string")
+            and (.workflowPath | type == "string")
+            and .evidenceState == "complete"
+            and .costGrain == "invocation"
+          ' "$file" >/dev/null 2>&1; then
+          jq -c --arg createdAt "$created_at" \
+            '{schema_version: 2, kind: "token_efficiency_observation", created_at: $createdAt, observation: .}' \
+            "$file" >> "$observation_tmp"
+        else
+          exit 1
+        fi
+      done
+  observation_status=("${PIPESTATUS[@]}")
+  set -e
+  if [[ ${observation_status[0]} -eq 0 && ${observation_status[1]} -eq 0 ]]; then
+    observation_complete=true
+  else
+    exit_code=1
+  fi
+fi
+if [[ "$observation_complete" == true ]]; then
+  mv "$observation_tmp" "$observation_shard"
+else
+  rm -f "$observation_tmp"
+fi
+
 printf '%s\n' "$exit_code" > "$exit_code_path"
 
 # The shard directory is persisted by the caller so each repository reuses

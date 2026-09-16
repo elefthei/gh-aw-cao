@@ -331,6 +331,87 @@ function eventsSource(events, sessionsById, runsById, sources) {
 }
 
 /**
+ * @param {Record<string, unknown>[]} events
+ * @param {Map<unknown, Record<string, unknown>>} sessionsById
+ * @param {Map<unknown, Record<string, unknown>>} runsById
+ * @param {Record<string, unknown>} sources
+ */
+function tokenEfficiencySources(events, sessionsById, runsById, sources) {
+  const issueBySessionId = new Map(
+    events
+      .filter((event) => event.type === 'safe_output.created' && event.githubEntityType === 'issue')
+      .map((event) => [event.sessionId, event])
+  );
+  const contextual = events
+    .filter((event) =>
+      event.type === 'token_efficiency.opportunity'
+      || event.type === 'token_efficiency.intervention')
+    .map((event) => {
+      const session = sessionsById.get(event.sessionId) ?? {};
+      const run = runsById.get(session.runId) ?? {};
+      const issue = issueBySessionId.get(event.sessionId);
+      const [owner, repository] = String(event.targetRepo ?? '').split('/');
+      const common = {
+        organization: owner,
+        repository,
+        workflow: event.targetWorkflowPath,
+        run: run.githubRunId === undefined ? undefined : String(run.githubRunId),
+        experiment: event.experimentId,
+        'opportunity-id': event.opportunityId,
+        'observed-at': event.timestamp ?? event.observedAt,
+        'evidence-link': event.payloadRef,
+        'repository-link': event.targetRepo ? `https://github.com/${event.targetRepo}` : undefined,
+        'workflow-link': event.targetRepo && event.targetWorkflowPath
+          ? `https://github.com/${event.targetRepo}/blob/HEAD/${event.targetWorkflowPath}`
+          : undefined,
+        'run-link': run.runLink
+      };
+      return { event, issue, common };
+    });
+  const opportunities = contextual
+    .filter(({ event }) => event.type === 'token_efficiency.opportunity')
+    .map(({ event, common }) => definedFields({
+      ...common,
+      'opportunity-kind': event.opportunityKind,
+      'assignment-run': event.assignmentRunId,
+      'evidence-window-start': event.evidenceWindowStart,
+      'evidence-window-end': event.evidenceWindowEnd,
+      'evidence-state': event.evidenceState,
+      'evidence-confidence': event.evidenceConfidence,
+      'cost-grain': event.costGrain
+    }));
+  const interventions = contextual
+    .filter(({ event }) => event.type === 'token_efficiency.intervention')
+    .map(({ event, issue, common }) => definedFields({
+      ...common,
+      'intervention-id': event.interventionId,
+      'intervention-state': event.interventionState,
+      'recommendation-disposition': event.recommendationDisposition,
+      'supersedes-intervention-id': event.supersedesInterventionId,
+      'superseded-by-intervention-id': event.supersededByInterventionId,
+      'recommendation-churn-count': event.recommendationChurnCount,
+      'recommendation-churn-rate': event.recommendationChurnRate,
+      'control-variant': event.controlVariant,
+      'optimized-variant': event.optimizedVariant,
+      'proposed-savings-aic': event.proposedSavingsAic,
+      'accepted-at': event.acceptedAt,
+      'issue-link': issue?.correlationId
+    }));
+  return {
+    opportunities: {
+      source: 'token-efficiency-opportunities',
+      rows: opportunities,
+      metadata: projectionMetadata(sources, 'events', 'token-efficiency-opportunities', true)
+    },
+    interventions: {
+      source: 'token-efficiency-interventions',
+      rows: interventions,
+      metadata: projectionMetadata(sources, 'events', 'token-efficiency-interventions', true)
+    }
+  };
+}
+
+/**
  * Projects canonical sessions with their run and repository context so
  * ingestion-rate queries (imported runs per workflow/repository) can group
  * sessions by organization, repository, workflow, and run.
@@ -636,9 +717,11 @@ export async function queryCanonicalViewSources(indexedDB, logicalSources, sourc
   const requested = new Set(sourceNames);
   const queries = createCanonicalQueries(indexedDB);
   const needsFirewall = requested.has('firewall-observations');
+  const needsTokenEfficiency = requested.has('token-efficiency-opportunities')
+    || requested.has('token-efficiency-interventions');
   const needsGraders = requested.has('grader-observations') || requested.has('operational-values');
-  const needsSessions = requested.has('sessions') || needsFirewall || needsGraders;
-  const needsEvents = requested.has('events') || needsFirewall || needsGraders;
+  const needsSessions = requested.has('sessions') || needsFirewall || needsGraders || needsTokenEfficiency;
+  const needsEvents = requested.has('events') || needsFirewall || needsGraders || needsTokenEfficiency;
   const [packages, repositories, workflows, runs, jobs, failedRuns, sessions, events, transactions] = await Promise.all([
     requested.has('packages') ? queries.packages.list() : [],
     requested.has('repositories') || requested.has('workflows') ? queries.repositories.list() : [],
@@ -679,6 +762,15 @@ export async function queryCanonicalViewSources(indexedDB, logicalSources, sourc
     );
   }
   if (requested.has('operational-values')) projected['operational-values'] = operationalValuesSource(graders, sources);
+  if (needsTokenEfficiency) {
+    const tokenEfficiency = tokenEfficiencySources(events, sessionsById, runsById, sources);
+    if (requested.has('token-efficiency-opportunities')) {
+      projected['token-efficiency-opportunities'] = tokenEfficiency.opportunities;
+    }
+    if (requested.has('token-efficiency-interventions')) {
+      projected['token-efficiency-interventions'] = tokenEfficiency.interventions;
+    }
+  }
   if (requested.has('transactions')) {
     projected.transactions = {
       source: 'transactions',

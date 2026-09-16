@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { root } from "./workflow-contract.helpers.mjs";
+import { root, workflow } from "./workflow-contract.helpers.mjs";
 
 const graderName = "optimization-token-optimizer-operational-value.sh";
 const grader = join(root, "optimization", ".github", "graders", graderName);
@@ -65,6 +65,10 @@ test("token optimizer metric measures only verified comparable savings", () => {
   }), 0.95);
   assert.equal(evaluate({
     ...examples.targetAttained,
+    optimizedAicPerAcceptedOutcome: -1,
+  }), null);
+  assert.equal(evaluate({
+    ...examples.targetAttained,
     optimizationOverheadAic: 35,
   }), 0);
   assert.equal(evaluate({
@@ -117,4 +121,59 @@ test("optimization package installs the token optimizer contract", () => {
     manifest,
     new RegExp(`destination: \\.github/aw/optimization/graders/${graderName.replaceAll(".", "\\.")}`),
   );
+});
+
+test("token optimizer is review-only, assignment-scoped, and gated before inference", () => {
+  const source = workflow("optimization-token-optimizer.md");
+  const policy = JSON.parse(readFileSync(join(root, ".github", "workflows", "cao.json"), "utf8"));
+  const packagePolicy = JSON.parse(readFileSync(join(root, "optimization", "cao.json"), "utf8"));
+
+  assert.match(source, /^name: "AW Optimization \/ Token Optimizer"$/m);
+  assert.match(source, /worker: token-optimizer/);
+  assert.match(source, /uses: shared\/activity-cache\.md/);
+  assert.match(source, /mode: gh-proxy/);
+  assert.match(source, /GH_AW_SAFE_OUTPUT_MODE: \$\{\{ inputs\.safe_output_mode \|\| 'review' \}\}/);
+  assert.match(source, /target-repo: \$\{\{ inputs\.safe_output_repo \|\| github\.repository \}\}/);
+  assert.doesNotMatch(source, /dispatch-workflow:/);
+  assert.match(source, /token_eligible: \$\{\{ steps\.token_eligibility\.outputs\.eligible \}\}/);
+  assert.match(source, /needs\.activation\.outputs\.token_eligible == 'true'/);
+  assert.match(source, /duplicate-active-intervention/);
+  assert.match(source, /intervention-history-unavailable/);
+  assert.match(source, /--where type=token_efficiency\.intervention/);
+  assert.match(source, /invalid-supersession-lineage/);
+  assert.match(source, /activity-cache-unavailable/);
+  assert.match(source, /assigned-runs-unavailable/);
+  assert.match(source, /targetRepo \| @uri/);
+  assert.match(source, /experimentId \| @uri/);
+  assert.doesNotMatch(source, /supersedesInterventionId: \(\$supersedesInterventionId \| select/);
+  assert.match(source, /token-efficiency-observation\.json/);
+  assert.match(source, /recommendationDisposition: "unapplied"/);
+  assert.match(source, /interventionState: "proposed"/);
+  assert.match(source, /attributableRunIds: \(\(\$attributableRunIds \| fromjson\) \+ \[\$optimizerRunId\] \| unique\)/);
+  assert.equal(
+    policy["control-plane"].packages.optimization.workers["token-optimizer"]["max-mode"],
+    "review",
+  );
+  assert.equal(packagePolicy.workers["token-optimizer"], "optimization-token-optimizer");
+});
+
+test("token optimizer observations use the Activity JSONL boundary, not issue text", () => {
+  const collector = readFileSync(join(root, "activity", "collect-logs.sh"), "utf8");
+  const adapter = readFileSync(
+    join(root, "dashboard", "site", "src", "data", "adapters", "gh-aw-logs.js"),
+    "utf8",
+  );
+  const sources = readFileSync(
+    join(root, "dashboard", "site", "src", "data", "queries", "view-sources.js"),
+    "utf8",
+  );
+
+  assert.match(collector, /name == "token-efficiency-observation"/);
+  assert.match(collector, /kind: "token_efficiency_observation"/);
+  assert.match(adapter, /envelope\.kind === 'token_efficiency_observation'/);
+  assert.match(adapter, /'token_efficiency\.opportunity'/);
+  assert.match(adapter, /'token_efficiency\.intervention'/);
+  assert.match(sources, /source: 'token-efficiency-opportunities'/);
+  assert.match(sources, /source: 'token-efficiency-interventions'/);
+  assert.doesNotMatch(adapter, /token_efficiency[\s\S]{0,1000}(title|body)/i);
 });
