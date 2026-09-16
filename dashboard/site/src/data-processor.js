@@ -39,12 +39,25 @@ const pending = new Map();
 const subscriptions = new Map();
 /** @type {Map<string, ReturnType<typeof publishNotification>>} */
 const workerNotificationHandles = new Map();
-/** @type {Set<(state: { completed: number, total: number }) => void>} */
+/** @type {Set<(state: { id: string, phase: 'start' | 'update' | 'complete', completed?: number, total?: number }) => void>} */
 const workerLoadingProgressListeners = new Set();
+/** @type {Set<string>} */
+const workerLoadingProgressOperations = new Set();
+
+/** @param {{ id: string, phase: 'start' | 'update' | 'complete', completed?: number, total?: number }} state */
+function emitWorkerLoadingProgress(state) {
+  for (const listener of workerLoadingProgressListeners) {
+    try {
+      listener(state);
+    } catch {
+      // Ignore listener failures so a broken consumer cannot interrupt other subscribers.
+    }
+  }
+}
 
 /**
  * Subscribes to worker-owned loading progress for the active top progress bar.
- * @param {(state: { completed: number, total: number }) => void} listener
+ * @param {(state: { id: string, phase: 'start' | 'update' | 'complete', completed?: number, total?: number }) => void} listener
  * @returns {() => void}
  */
 export function subscribeWorkerLoadingProgress(listener) {
@@ -482,14 +495,10 @@ function getWorker() {
   worker.addEventListener('message', (event) => {
     if (event.data?.type === 'loading-progress') {
       const state = event.data.state;
-      if (Number.isFinite(state?.completed) && Number.isFinite(state?.total) && state.total > 0) {
-        for (const listener of workerLoadingProgressListeners) {
-          try {
-            listener(state);
-          } catch {
-            // Ignore listener failures so a broken consumer cannot interrupt other subscribers.
-          }
-        }
+      if (typeof state?.id === 'string' && ['start', 'update', 'complete'].includes(state.phase)) {
+        if (state.phase === 'start') workerLoadingProgressOperations.add(state.id);
+        if (state.phase === 'complete') workerLoadingProgressOperations.delete(state.id);
+        emitWorkerLoadingProgress(state);
       }
       return;
     }
@@ -558,6 +567,10 @@ function resetWorker(processor) {
   processor?.terminate();
   if (worker !== processor) return;
   worker = null;
+  for (const id of workerLoadingProgressOperations) {
+    emitWorkerLoadingProgress({ id, phase: 'complete' });
+  }
+  workerLoadingProgressOperations.clear();
   for (const notification of workerNotificationHandles.values()) notification.dismiss();
   workerNotificationHandles.clear();
   for (const subscription of subscriptions.values()) subscription.registeredWorker = null;
