@@ -51,6 +51,9 @@ const activityExpectedFiles = [
   ".github/aw/activity/gh-aw-logs.mjs",
   ".github/aw/activity/inventory.mjs",
   ".github/aw/activity/inventory-sources.mjs",
+  ".github/aw/activity/token-efficiency-assignment.mjs",
+  ".github/aw/activity/token-efficiency-grader-evidence.mjs",
+  ".github/aw/activity/token-efficiency-verifier.mjs",
   ".github/aw/activity/token-intervention-lifecycle.mjs",
   ".github/workflows/cao-activity.yml",
 ];
