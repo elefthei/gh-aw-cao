@@ -489,7 +489,7 @@ describe('dashboard document validation', () => {
   it('defines every other editable experimental page as one full-view lazy table', () => {
     // Pages that intentionally compose more than one editable view, asserted separately below
     // or by their own focused suites: safe-outputs, maintenance, entity cards, cost, and audit.
-    const multiViewPageIds = new Set(['safe-outputs', 'maintenance', 'issues', 'pull-requests', 'cost', 'audit']);
+    const multiViewPageIds = new Set(['safe-outputs', 'maintenance', 'issues', 'pull-requests', 'sessions', 'cost', 'audit']);
     const document = JSON.parse(authoritativeDashboardSource);
     const experimentalIds = new Set(document.dashboard.navigation
       .filter((/** @type {{ experimental?: boolean }} */ section) => section.experimental)
@@ -1120,12 +1120,17 @@ dashboard:
     expect(document.dashboard.navigation.find((/** @type {{ label?: string }} */ section) => section.label === 'Data').pages).toEqual([
       'workflows',
       'runs',
-      'sessions',
       'engines-models',
       'firewall',
       'mcps',
       'events'
     ]);
+    expect(document.dashboard.navigation.find(
+      (/** @type {{ label?: string }} */ section) => section.label === 'Investigate'
+    )).toMatchObject({
+      experimental: true,
+      pages: expect.arrayContaining(['sessions'])
+    });
     expect(validateDashboardDocument(JSON.stringify(document)).ok).toBe(true);
   });
 
