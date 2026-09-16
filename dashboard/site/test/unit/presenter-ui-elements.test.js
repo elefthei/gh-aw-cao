@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest';
-import { enableDashboardSidebar, renderDashboardSidebar } from '../../src/components/dashboard-sidebar.js';
+import { enableDashboardNavigation, renderDashboardNavigation } from '../../src/components/dashboard-navigation.js';
 import { buildChartPoints, prepareChartPoints, prepareTableRows } from '../../src/components/view-data.js';
 
 describe('dashboard sidebar', () => {
@@ -10,7 +10,7 @@ describe('dashboard sidebar', () => {
   });
 
   it('owns its navigation markup and collapse interaction', () => {
-    const sidebar = renderDashboardSidebar([
+    const sidebar = renderDashboardNavigation([
       { id: 'overview', title: 'Overview', icon: 'home' },
       { id: 'runs', title: 'Runs', icon: 'play' }
     ], 'Example', [{ label: 'Main', pages: ['overview', 'runs'] }]);
@@ -21,7 +21,7 @@ describe('dashboard sidebar', () => {
     root.append(shell);
     document.body.append(root);
 
-    enableDashboardSidebar(root);
+    enableDashboardNavigation(root);
 
     expect(sidebar.dataset.defaultPageId).toBe('overview');
     expect(sidebar.querySelectorAll('[data-nav-page-id]')).toHaveLength(2);
@@ -34,7 +34,7 @@ describe('dashboard sidebar', () => {
   });
 
   it('groups experimental pages in one explicit section', () => {
-    const sidebar = renderDashboardSidebar([
+    const sidebar = renderDashboardNavigation([
       { id: 'overview', title: 'Overview' },
       { id: 'preview-a', title: 'Preview A' },
       { id: 'preview-b', title: 'Preview B' }

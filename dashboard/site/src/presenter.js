@@ -22,8 +22,11 @@ import { DASHBOARD_RENDER_EVENT, emitDashboardDebugEvent } from './debug-events.
 import { dashboardViewAliasName } from './data/queries/view-payload-compiler.js';
 import { dashboardHorizonHours, formatDashboardHorizon, formatDashboardHorizonHours, resolveDashboardHorizon } from './horizon.js';
 import { sourceContinuation } from './data/continuation.js';
+import { renderDashboardNavigation, enableDashboardNavigation } from './components/dashboard-navigation.js';
+import { renderDashboardHeader } from './components/dashboard-header.js';
+import { renderDashboardFooter } from './components/dashboard-footer.js';
+import { renderDashboardFrame } from './components/dashboard-frame.js';
 import { scopedStorageKey } from './storage-scope.js';
-import { enableDashboardSidebar, renderDashboardSidebar } from './components/dashboard-sidebar.js';
 import { buildChartPoints, prepareChartPoints, prepareTableRows, toViewText } from './components/view-data.js';
 import { enableDashboardKeyboardNavigation, updateWithViewTransition } from './components/dashboard-interactions.js';
 
@@ -166,15 +169,25 @@ export function renderDashboard(input) {
   const styleEl = h('style', null, getPrimerStyles());
   const skipLink = h('a', { href: '#main-content', className: 'skip-link' }, 'Skip to main content');
 
-  const sidebar = renderDashboardSidebar(pages, sidebarTitle, document.dashboard.navigation);
-  const mainContent = renderMainContent(document, pages, sources, githubUrlBase, dashboardRepository, dashboardDefaults, evaluatedAt, summarizeDataState(new Map(Object.entries(rawSources))), viewer, dashboardHorizon.element, input.commitSha);
-
-  const appShell = h(
-    'div',
-    { className: 'app-shell' },
-    sidebar,
-    mainContent
-  );
+  const sidebar = renderDashboardNavigation(pages, sidebarTitle, document.dashboard.navigation);
+  const initialPage = pages.find((page) => page.id !== 'configuration') ?? pages[0];
+  const overviewPage = pages.find((page) => page.id === 'overview');
+  const initialPageHref = initialPage ? `#page-${encodeURIComponent(initialPage.id)}` : '#main-content';
+  const appShell = renderDashboardFrame({
+    navigation: sidebar,
+    header: renderDashboardHeader({
+      title: initialPage ? getPageTitle(initialPage) : '',
+      description: initialPage?.description,
+      overviewPageHref: overviewPage ? `#page-${encodeURIComponent(overviewPage.id)}` : initialPageHref,
+      dashboardHorizon: dashboardHorizon.element,
+      githubUrlBase,
+      dashboardRepository,
+      viewer
+    }),
+    callouts: renderSiteCallouts(document.dashboard.callouts, sources),
+    pages: pages.map((page) => renderPagePlaceholder(page)),
+    footer: renderDashboardFooter({ evaluatedAt, commitSha: input.commitSha })
+  });
   const root = h(
     'div',
     { className: 'dashboard-root' },
@@ -185,7 +198,7 @@ export function renderDashboard(input) {
   void enableDashboardDomProvenanceWhenDebugging(root, document).catch((error) => {
     root.dataset.domProvenanceError = String(error?.message ?? error);
   });
-  enableDashboardSidebar(root);
+  enableDashboardNavigation(root);
   restoreDashboardTheme(root);
   enableHorizonOutsideClickDismissal(root);
   root.addEventListener('dashboard-time-window-change', (event) => {
@@ -344,109 +357,6 @@ function enableResponsiveReportActions(root) {
   };
   placeActions();
   media.addEventListener?.('change', placeActions);
-}
-
-/**
- * @param {PresentationDocument} document
- * @param {Array<PresentableBuiltInPage | PresentableCustomPage>} pages
- * @param {Record<string, LogicalSourceInput>} sources
- * @param {string} githubUrlBase
- * @param {string | null} dashboardRepository
- * @param {Record<string, unknown>} dashboardDefaults
- * @param {string} evaluatedAt
- * @param {DataState} effectiveState
- * @param {LocalViewer | null} viewer
- * @param {HTMLElement} dashboardHorizon
- * @param {string | null | undefined} commitSha
- * @returns {HTMLElement}
- */
-function renderMainContent(document, pages, sources, githubUrlBase, dashboardRepository, dashboardDefaults, evaluatedAt, effectiveState, viewer, dashboardHorizon, commitSha) {
-  const initialPage = pages.find((page) => page.id !== 'configuration') ?? pages[0];
-  const overviewPage = pages.find((page) => page.id === 'overview');
-  const initialPageTitle = initialPage ? getPageTitle(initialPage) : '';
-  const initialPageDescription = initialPage?.description;
-  const initialPageHref = initialPage ? `#page-${encodeURIComponent(initialPage.id)}` : '#main-content';
-  const overviewPageHref = overviewPage ? `#page-${encodeURIComponent(overviewPage.id)}` : initialPageHref;
-  return h(
-    'div',
-    { className: 'app-main' },
-    h(
-      'header',
-      { className: 'top-nav' },
-      h(
-        'div',
-        { className: 'shell' },
-        h(
-          'div',
-          { className: 'overview-header', 'aria-labelledby': 'page-title' },
-          h(
-            'nav',
-            { className: 'breadcrumb-context', 'aria-label': 'Breadcrumb' },
-            h('a', { hidden: true, 'data-breadcrumb-root': '' }),
-            h('a', { href: overviewPageHref, hidden: true, 'data-breadcrumb-dashboard': '' }, 'Overview')
-          ),
-          h(
-            'div',
-            { className: 'title-area' },
-            h('h1', { id: 'page-title', tabIndex: -1, 'data-breadcrumb-page': '' }, initialPageTitle),
-            h('a', { className: 'title-link', 'data-page-title-link': '', hidden: true }),
-            h('span', { className: 'mode-indicator', 'data-page-mode': '', hidden: true })
-          ),
-          h(
-            'p',
-            { className: 'lede', 'data-page-description': '', hidden: !initialPageDescription },
-            initialPageDescription ?? ''
-          )
-        ),
-        h(
-          'div',
-          { className: 'report-actions' },
-          dashboardHorizon,
-          dashboardRepository
-            ? h(
-              'a',
-              {
-                className: 'repository-link',
-                href: `${githubUrlBase}/${dashboardRepository}`,
-                'aria-label': `View ${dashboardRepository} on GitHub`,
-                title: `View ${dashboardRepository} on GitHub`
-              },
-              octicon('mark-github'),
-              h('span', { className: 'sr-only action-label' }, dashboardRepository)
-            )
-            : null
-        )
-      )
-    ),
-    renderSiteCallouts(document.dashboard.callouts, sources),
-    h(
-      'main',
-      { id: 'main-content', className: 'dashboard-prototype', tabIndex: -1 },
-      h(
-        'div',
-        { className: 'report-body' },
-        h(
-          'div',
-          { className: 'dashboard-pages' },
-          pages.map((page) => renderPagePlaceholder(page))
-        )
-      )
-    ),
-    h(
-      'footer',
-      { className: 'report-footer' },
-      h(
-        'div',
-        { className: 'report-footer-status' },
-        h('span', null, 'Last updated'),
-        h('time', { dateTime: evaluatedAt }, `${formatReportDate(evaluatedAt)} UTC`),
-        h('span', { className: 'report-footer-provenance' }, '· Generated deterministically from dashboard data.')
-      ),
-      commitSha && commitSha !== 'development'
-        ? h('span', { className: 'report-footer-version', title: commitSha }, 'Version ', h('code', null, commitSha.slice(0, 7)))
-        : null
-    )
-  );
 }
 
 /**
