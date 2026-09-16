@@ -1985,6 +1985,7 @@
           { "field": "repository-slug", "as": "repository" },
           { "field": "workflow" },
           { "field": "workflow-display-name", "as": "workflow-name" },
+          { "field": "workflow-identity", "as": "workflow-label" },
           { "field": "declared-role", "as": "workflow-role" },
           { "field": "declared-mode", "as": "rollout-mode" },
           { "field": "declared-registration", "as": "workflow-active" },
@@ -4786,6 +4787,40 @@
             "availability": true
           },
           "views": [
+            {
+              "id": "workflows-by-runs",
+              "title": "Workflows by runs",
+              "description": "Declared workflows ranked by the number of observed runs.",
+              "data": {
+                "source": "workflow-inventory",
+                "order-by": [
+                  {
+                    "field": "runs",
+                    "direction": "desc"
+                  }
+                ]
+              },
+              "mark": "chart",
+              "chart": "pie",
+              "layout": "horizontal",
+              "empty-message": "No workflow runs observed.",
+              "encoding": {
+                "x": {
+                  "field": "workflow-label",
+                  "type": "nominal",
+                  "title": "Workflow"
+                },
+                "y": {
+                  "field": "runs",
+                  "type": "quantitative",
+                  "title": "Runs"
+                },
+                "href": {
+                  "field": "workflow-link",
+                  "type": "nominal"
+                }
+              }
+            },
             {
               "id": "workflows-inventory",
               "title": "Workflows",

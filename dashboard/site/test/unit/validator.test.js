@@ -939,6 +939,31 @@ describe('dashboard document validation', () => {
     expect(validateDashboardDocument(JSON.stringify(document)).ok).toBe(true);
   });
 
+  it('defines the Workflows run ranking as a declarative pie chart', () => {
+    const document = JSON.parse(authoritativeDashboardSource);
+    const page = document.dashboard.pages.find((/** @type {{ id: string }} */ candidate) =>
+      candidate.id === 'workflows'
+    );
+
+    expect(page.definition.views.find((/** @type {{ id: string }} */ view) =>
+      view.id === 'workflows-by-runs'
+    )).toMatchObject({
+      data: {
+        source: 'workflow-inventory',
+        'order-by': [{ field: 'runs', direction: 'desc' }]
+      },
+      mark: 'chart',
+      chart: 'pie',
+      layout: 'horizontal',
+      encoding: {
+        x: { field: 'workflow-label', type: 'nominal' },
+        y: { field: 'runs', type: 'quantitative' },
+        href: { field: 'workflow-link', type: 'nominal' }
+      }
+    });
+    expect(validateDashboardDocument(JSON.stringify(document)).ok).toBe(true);
+  });
+
   it('defines Overview as one evidence-backed outcomes element', () => {
     const document = JSON.parse(authoritativeDashboardSource);
     const page = document.dashboard.pages.find((/** @type {{ id: string }} */ candidate) =>
@@ -1010,7 +1035,7 @@ dashboard:
     const transactionsPage = document.dashboard.pages.find((/** @type {{ id: string }} */ page) => page.id === 'transactions');
 
     const packagesView = packagesPage.definition.views[0];
-    const workflowsView = workflowsPage.definition.views[0];
+    const workflowsView = workflowsPage.definition.views.find((/** @type {{ id: string }} */ view) => view.id === 'workflows-inventory');
     const packageWorkflowsView = packageDetailPage.views.find((/** @type {{ id: string }} */ view) => view.id === 'package-workflow-table');
     const runsView = runsPage.definition.views.find((/** @type {{ id: string }} */ view) => view.id === 'runs-runs-source');
     const transactionsView = transactionsPage.views.find((/** @type {{ id: string }} */ view) => view.id === 'transaction-entries');
@@ -1057,7 +1082,7 @@ dashboard:
       layout: 'full-view'
     });
     expect(packagesPage.definition.views).toHaveLength(1);
-    expect(workflowsPage.definition.views).toHaveLength(1);
+    expect(workflowsPage.definition.views).toHaveLength(2);
     expect(runsPage.definition.views).toHaveLength(2);
     expect(document.dashboard.navigation.find((/** @type {{ label?: string }} */ section) => !section.label).pages).toEqual([
       'overview',
