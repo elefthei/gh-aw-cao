@@ -391,10 +391,10 @@ following source contract:
 | Tool activity | `run.mcp_tool_usage.tool_calls[]`, with the documented audit fallback; one tool call | Preserve server, tool, status, timestamp, sizes, and correlation identity. A configured tool inventory is separate static evidence and MUST NOT be inferred from observed calls. |
 | Run reliability | Canonical Run status and conclusion from `workflow_runs` and enriched `run` envelopes; one Run attempt | Failure rate uses distinct completed attempts only. Missing conclusions do not enter either numerator or denominator. |
 | Experiment assignment | `run.experiments.assignments`; one experiment assignment per Run | Preserve experiment name and variant exactly. Cumulative counts are diagnostics and MUST NOT create assignments. |
-| Accepted target outcome | Safe-output lifecycle plus authoritative GitHub disposition or the accepted-evidence rule of the frozen evaluator; one durable target-workflow outcome | Creating a safe output does not establish acceptance. Accepted identity and disposition MUST be distinct from the producing Run. |
+| Accepted target outcome | Full schema-version-4 operational-value result retained from the Run's immutable grader artifact under the evaluator digest frozen by the opportunity; one accepted result per Run attempt and evaluator digest | Require mature `pass` or accepted status, finite value, and evidence at or before the comparison cutoff. The compact gh-aw Run projection is insufficient because it omits evaluator implementation and maturity metadata. Creating a safe output does not establish acceptance. |
 | Recommendation disposition | Safe-output lifecycle, explicit supersession relation, implementation Run or pull request, and authoritative GitHub disposition; one optimizer recommendation | Preserve `applied`, `superseded`, `outdated`, `duplicate`, `unapplied`, `failed-start`, or `rejected`. A generated issue, assignment attempt, or open state alone does not establish acceptance or implementation. |
 | Optimization overhead | Invocation or non-overlapping Run-aggregate AIC for auditor, optimizer, verifier, and replacement recommendations attributable to one frozen opportunity and intervention lineage | Deduplicate by Run attempt, preserve cost grain, and exclude unrelated repositories, workflows, opportunities, and portfolio dispatches. |
-| Outcome quality | Frozen grader or eval observation with evaluator digest; one outcome or stable opportunity | Compare only observations produced by the same definition and evaluator digest. Missing quality evidence is unknown. |
+| Outcome quality | Full schema-version-4 operational-value result retained as a correlated `token_efficiency_operational_value_observation`; one Run attempt and evaluator digest | Compare only mature accepted results produced by the exact frozen evaluator digest. Missing or malformed grader evidence is unknown and makes the sample incomplete or incomparable. |
 | Operational value | Schema-version-4 operational-value result; one stable opportunity at one evidence cutoff | Preserve value, maturity, evidence cutoff, accepted provenance, diagnostics, and evaluator digest. |
 | Workflow declaration | Workflow inventory at the exact reviewed source revision | Supply configured tools, model, trigger, budget, and package classification. Static declarations MUST NOT prove runtime use. |
 
@@ -497,12 +497,46 @@ hold:
 4. each variant has at least one distinct accepted outcome;
 5. AIC and completed-Run conclusion evidence is complete for every included Run;
 6. outcome-quality evidence uses the same definition and evaluator digest; and
-7. the later of fourteen days after assignment or the minimum-sample threshold
-   has been reached without passing the evidence cutoff;
+7. the frozen minimum maturity interval after authoritative implementation
+   completion and the minimum-sample threshold have been reached at the evidence
+   cutoff;
 8. recommendation disposition is authoritative and implementation completion
    is known; and
 9. optimization-overhead AIC is complete for distinct optimizer-family Run
    attempts attributable to the same opportunity and intervention lineage.
+
+A verification claim SHALL contain selectors only. The Activity verifier MUST
+derive the evaluation contract and baseline window from the frozen opportunity,
+the optimized-window start and maturity time from authoritative implementation
+completion, and the optimized-window end from the selected evidence cutoff. The
+cutoff MUST NOT be later than the authoritative verifier Run completion time.
+The verifier MUST discover target Run attempts directly from retained `run`
+envelopes by exact target Repository, Workflow path, experiment assignment,
+variant, and window. Claim-supplied Run lists, outcome lists, measurements,
+grader contracts, AIC, or redefinitions of grain, variants, evaluator,
+comparison key, acceptance rule, sample size, maturity, or windows MUST NOT
+participate in a result.
+
+Each matching target Run MUST have exactly one comparable schema-version-4
+operational-value result retained from its immutable grader artifact as a
+`token_efficiency_operational_value_observation`, identified by
+`source=operational-value` or `id=operational-value`, with
+`implementation.digest` exactly equal to the frozen evaluator digest. Its
+evidence MUST be mature, its evidence timestamp MUST be at or before the cutoff,
+and its value MUST be finite. Accepted outcome identity SHALL be stable over the
+Run attempt and evaluator digest. A missing or malformed grader result makes the
+variant incomplete or incomparable. A valid failed or non-accepted grader
+result remains distinct from Run reliability and does not enter the accepted
+outcome denominator. All matching Run attempts enter cost and reliability;
+accepted grader results enter the denominator and outcome-quality aggregate.
+
+The verifier SHALL derive overhead AIC from exact retained Run attempts. The
+authoritative optimizer and verifier attempts are always included. A frozen
+attributable Run ID is included only when its resolved Run belongs to the
+control Repository and an allowed optimization-family auditor, optimizer, or
+verifier Workflow. Target evidence Runs and arbitrary caller roles are excluded.
+Every included target Run timestamp MUST fall within its authoritative baseline
+or optimized window.
 
 Reliability SHALL be the completed-Run failure rate for each variant and SHALL
 remain separate from cost. Outcome quality SHALL retain the frozen grader or
@@ -638,8 +672,12 @@ The IndexedDB Event representation SHALL use camel-case fields:
 `optimizationOverheadAic`, `netRealizedSavingsAic`, `verifiedNetGain`,
 `recommendationChurnCount`, `recommendationChurnRate`,
 `baselineAicPerAcceptedOutcome`, `optimizedAicPerAcceptedOutcome`,
+`baselineAcceptedTargetOutcomeCount`, `optimizedAcceptedTargetOutcomeCount`,
 `acceptedTargetOutcomeCount`, `baselineFailureRate`, `optimizedFailureRate`,
-`outcomeQualityPreserved`, and the relationship IDs applicable to that Event.
+`outcomeQualityPreserved`, `reliabilityPreserved`, and separate baseline and
+optimized `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`,
+and `reasoningTokens` fields, plus the relationship IDs applicable to that
+Event. No total-token field is permitted.
 
 The `gh-aw-cao.dashboard-sql-export` representation SHALL emit the same Events
 with equivalent snake-case columns. Each SQL-export row SHALL retain

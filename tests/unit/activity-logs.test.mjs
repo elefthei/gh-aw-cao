@@ -81,7 +81,7 @@ process.stderr.write("Fetched 1 run\\n");
     const collection = await execFileAsync("bash", [path.resolve("activity/collect-logs.sh")], { env });
     const { stdout } = await execFileAsync(process.execPath, [path.resolve("activity/logs.mjs")], { env });
     const invocations = (await readFile(item.argumentsPath, "utf8")).trim().split("\n").map(JSON.parse);
-    assert.equal(invocations.length, 4);
+    assert.equal(invocations.length, 5);
     const args = invocations[0];
     assert.deepEqual(args.slice(0, 3), ["aw", "logs", "--audit"]);
     assert.equal(args.includes("--json"), false);
@@ -110,6 +110,11 @@ process.stderr.write("Fetched 1 run\\n");
       "api",
       "--paginate",
       "repos/githubnext/gh-aw-cao/actions/artifacts?name=token-efficiency-lifecycle-claim&per_page=100",
+    ]);
+    assert.deepEqual(invocations[4].slice(0, 3), [
+      "api",
+      "--paginate",
+      "repos/githubnext/gh-aw-cao/actions/artifacts?name=token-efficiency-verification-claim&per_page=100",
     ]);
     const runs = await readGhAwLogShards(item.logsPath);
     assert.deepEqual(runs.map((run) => run.repository), [

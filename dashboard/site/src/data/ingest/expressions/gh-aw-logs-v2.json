@@ -19,6 +19,11 @@
       "emits": ["repository", "workflow", "run", "session", "event"],
       "identity": ["run_id", "run_attempt"]
     },
+    "token_efficiency_operational_value_observation": {
+      "payloadPath": "observation",
+      "emits": ["event"],
+      "identity": ["runId", "runAttempt"]
+    },
     "safe_output_item": {
       "payloadPath": "safe_output",
       "emits": ["event"],
@@ -33,6 +38,11 @@
       "payloadPath": "observation",
       "emits": ["event"],
       "identity": ["optimizerRunId", "lifecycleObservationId"]
+    },
+    "token_efficiency_comparison_observation": {
+      "payloadPath": "observation",
+      "emits": ["event"],
+      "identity": ["verifierRunId", "verifierRunAttempt", "comparisonId"]
     },
     "github_api_rate_limit": {
       "payloadPath": "rate_limit",

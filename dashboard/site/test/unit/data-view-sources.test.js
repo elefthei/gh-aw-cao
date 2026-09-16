@@ -586,6 +586,92 @@ describe('canonical view sources', () => {
     }]);
   });
 
+  it('resolves token comparisons through the canonical worker query boundary', async () => {
+    const records = [
+      {
+        schema_version: 2,
+        kind: 'token_efficiency_run_context',
+        run: {
+          run_id: 1199201,
+          run_attempt: 1,
+          organization: 'githubnext',
+          repository: 'githubnext/gh-aw-cao',
+          workflow_name: 'AW Optimization / Token Efficiency Verifier',
+          workflow_path: '.github/workflows/optimization-token-efficiency-verifier.md',
+          status: 'completed',
+          conclusion: 'success',
+          created_at: '2026-10-02T00:00:00Z',
+          updated_at: '2026-10-02T00:02:00Z'
+        }
+      },
+      {
+        schema_version: 2,
+        kind: 'token_efficiency_comparison_observation',
+        observation: {
+          schemaVersion: 1,
+          comparisonId: 'token-comparison:1',
+          observedAt: '2026-10-02T00:02:00Z',
+          verifierRunId: '1199201',
+          verifierRunAttempt: 1,
+          verifierWorkflowPath: '.github/workflows/optimization-token-efficiency-verifier.md',
+          verifierWorkflowName: 'AW Optimization / Token Efficiency Verifier',
+          targetRepo: 'octo/example',
+          workflowPath: '.github/workflows/review.md',
+          opportunityId: 'token-opportunity:1',
+          interventionId: 'token-intervention:1',
+          implementationChangeId: 'github:pull-request:octo/example:42',
+          experimentId: 'review-context-v1',
+          evaluatorDigest: 'quality:sha256',
+          evidenceState: 'complete',
+          costGrain: 'invocation',
+          controlVariant: 'control',
+          optimizedVariant: 'optimized',
+          baselineAicPerAcceptedOutcome: 10,
+          optimizedAicPerAcceptedOutcome: 5,
+          baselineAcceptedTargetOutcomeCount: 2,
+          optimizedAcceptedTargetOutcomeCount: 2,
+          acceptedTargetOutcomeCount: 2,
+          baselineFailureRate: 0,
+          optimizedFailureRate: 0,
+          outcomeQualityPreserved: true,
+          reliabilityPreserved: true,
+          grossRealizedSavingsAic: 10,
+          optimizationOverheadAic: 3,
+          netRealizedSavingsAic: 7,
+          verifiedNetGain: 0.35,
+          maturityAt: '2026-09-30T00:00:00Z',
+          maturityStatus: 'mature',
+          evidenceCutoff: '2026-10-01T00:00:00Z'
+        }
+      }
+    ];
+    await ingestCachedGhAwJsonl(
+      indexedDB,
+      `${records.map((record) => JSON.stringify(record)).join('\n')}\n`,
+      { now: Date.parse('2026-10-02T00:02:00Z') }
+    );
+    const canonical = await queryCanonicalViewSources(indexedDB, {}, ['events']);
+    const projected = executeDashboardQueries(
+      dashboardQueries,
+      canonical,
+      ['token-efficiency-comparisons']
+    );
+
+    expect(projected['token-efficiency-comparisons'].rows).toEqual([
+      expect.objectContaining({
+        organization: 'octo',
+        repository: 'example',
+        workflow: '.github/workflows/review.md',
+        'comparison-id': 'token-comparison:1',
+        'evidence-state': 'complete',
+        'baseline-aic-per-accepted-outcome': 10,
+        'optimized-aic-per-accepted-outcome': 5,
+        'net-realized-savings-aic': 7,
+        'verified-net-gain': 0.35
+      })
+    ]);
+  });
+
   it('projects sessions with run and repository context even when events are not requested', async () => {
     await loadCanonicalViewSources(indexedDB, collection('generation-a', sources.events.rows), { ingest: true });
 

@@ -151,6 +151,7 @@ test("every worker uses the standard dispatch envelope and safe mode vocabulary"
     ["optimization-ai-credit-auditor.md", "optimization", "ai-credit-auditor"],
     ["optimization-ai-credit-optimizer.md", "optimization", "ai-credit-optimizer"],
     ["optimization-token-optimizer.md", "optimization", "token-optimizer"],
+    ["optimization-token-efficiency-verifier.md", "optimization", "token-efficiency-verifier"],
     ["software-development-practices-github-well-architected.md", "software-development-practices", "github-well-architected"],
     ["software-development-practices-nist-ssdf.md", "software-development-practices", "nist-ssdf"],
     ["self-care-accessibility-checker.md", "self-care", "accessibility-checker"],
@@ -195,7 +196,7 @@ test("every worker uses the standard dispatch envelope and safe mode vocabulary"
     assert.match(source, /SAFE_OUTPUT_REPO:.*safe_output_mode.*'review'.*safe_output_repo.*github\.repository.*target_repo/);
 
     for (const line of source.match(/^\s+target-repo:.*$/gm) || []) {
-      if (name === "optimization-token-optimizer.md") {
+      if (["optimization-token-optimizer.md", "optimization-token-efficiency-verifier.md"].includes(name)) {
         assert.match(line, /inputs\.safe_output_repo.*github\.repository/);
         assert.doesNotMatch(line, /inputs\.target_repo/);
       } else {

@@ -48,6 +48,18 @@ function optionalNumber(value, field) {
 }
 
 /** @param {unknown} value @param {string} field */
+function nullableNumber(value, field) {
+  return optionalNumber(value, field) ?? null;
+}
+
+/** @param {unknown} value @param {string} field */
+function optionalBoolean(value, field) {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'boolean') throw new TypeError(`${field} must be a boolean`);
+  return value;
+}
+
+/** @param {unknown} value @param {string} field */
 function optionalTimestamp(value, field) {
   return value === undefined || value === null
     ? undefined
@@ -184,7 +196,11 @@ export function adaptSqlExport(input) {
         const eventType = requiredString(row.event_type, 'event_type');
         const lifecycle = eventType === 'token_efficiency.intervention'
           && row.event_source === 'token-intervention-lifecycle';
-        const targetRepo = lifecycle
+        const comparison = eventType === 'token_efficiency.comparison'
+          && row.event_source === 'token-efficiency-verifier';
+        const tokenEfficiencyEvent = lifecycle || comparison;
+        const comparisonNumber = comparison ? nullableNumber : optionalNumber;
+        const targetRepo = tokenEfficiencyEvent
           ? requiredString(row.optimization_target_repo, 'optimization_target_repo')
           : optionalString(row.optimization_target_repo);
         const targetCoordinates = targetRepo?.split('/');
@@ -208,10 +224,10 @@ export function adaptSqlExport(input) {
           targetRepo,
           targetOrganization: targetCoordinates?.[0],
           targetRepository: targetCoordinates?.[1],
-          targetWorkflowPath: lifecycle
+          targetWorkflowPath: tokenEfficiencyEvent
             ? requiredString(row.optimization_workflow_path, 'optimization_workflow_path')
             : optionalString(row.optimization_workflow_path),
-          opportunityId: lifecycle
+          opportunityId: tokenEfficiencyEvent
             ? requiredString(row.optimization_opportunity_id, 'optimization_opportunity_id')
             : optionalString(row.optimization_opportunity_id),
           opportunityKind: optionalString(row.optimization_opportunity_kind),
@@ -234,7 +250,7 @@ export function adaptSqlExport(input) {
             row.optimization_attributable_run_ids,
             'optimization_attributable_run_ids'
           ),
-          interventionId: lifecycle
+          interventionId: tokenEfficiencyEvent
             ? requiredString(row.optimization_intervention_id, 'optimization_intervention_id')
             : optionalString(row.optimization_intervention_id),
           lifecycleObservationId: lifecycle
@@ -243,6 +259,10 @@ export function adaptSqlExport(input) {
               'optimization_lifecycle_observation_id'
             )
             : optionalString(row.optimization_lifecycle_observation_id),
+          comparisonId: comparison
+            ? requiredString(row.optimization_comparison_id, 'optimization_comparison_id')
+            : optionalString(row.optimization_comparison_id),
+          verificationComparisonId: optionalString(row.optimization_verification_comparison_id),
           previousInterventionState: optionalEnum(
             row.optimization_previous_intervention_state,
             'optimization_previous_intervention_state',
@@ -272,6 +292,91 @@ export function adaptSqlExport(input) {
             row.optimization_proposed_savings_aic,
             'optimization_proposed_savings_aic'
           ),
+          evaluatorDigest: comparison
+            ? requiredString(row.optimization_evaluator_digest, 'optimization_evaluator_digest')
+            : optionalString(row.optimization_evaluator_digest),
+          verifierRunAttempt: row.optimization_verifier_run_attempt === undefined
+            || row.optimization_verifier_run_attempt === null
+            ? undefined
+            : positiveInteger(
+              row.optimization_verifier_run_attempt,
+              'optimization_verifier_run_attempt'
+            ),
+          verifierWorkflowPath: optionalString(row.optimization_verifier_workflow_path),
+          verifierWorkflowName: optionalString(row.optimization_verifier_workflow_name),
+          baselineWindow: row.optimization_baseline_window,
+          optimizedWindow: row.optimization_optimized_window,
+          sourceGenerations: row.optimization_source_generations,
+          baselineAicPerAcceptedOutcome: comparisonNumber(
+            row.optimization_baseline_aic_per_accepted_outcome,
+            'optimization_baseline_aic_per_accepted_outcome'
+          ),
+          optimizedAicPerAcceptedOutcome: comparisonNumber(
+            row.optimization_optimized_aic_per_accepted_outcome,
+            'optimization_optimized_aic_per_accepted_outcome'
+          ),
+          baselineAcceptedTargetOutcomeCount: comparisonNumber(
+            row.optimization_baseline_accepted_target_outcome_count,
+            'optimization_baseline_accepted_target_outcome_count'
+          ),
+          optimizedAcceptedTargetOutcomeCount: comparisonNumber(
+            row.optimization_optimized_accepted_target_outcome_count,
+            'optimization_optimized_accepted_target_outcome_count'
+          ),
+          acceptedTargetOutcomeCount: comparisonNumber(
+            row.optimization_accepted_target_outcome_count,
+            'optimization_accepted_target_outcome_count'
+          ),
+          baselineFailureRate: comparisonNumber(
+            row.optimization_baseline_failure_rate,
+            'optimization_baseline_failure_rate'
+          ),
+          optimizedFailureRate: comparisonNumber(
+            row.optimization_optimized_failure_rate,
+            'optimization_optimized_failure_rate'
+          ),
+          outcomeQualityPreserved: optionalBoolean(
+            row.optimization_outcome_quality_preserved,
+            'optimization_outcome_quality_preserved'
+          ),
+          reliabilityPreserved: optionalBoolean(
+            row.optimization_reliability_preserved,
+            'optimization_reliability_preserved'
+          ),
+          grossRealizedSavingsAic: comparisonNumber(
+            row.optimization_gross_realized_savings_aic,
+            'optimization_gross_realized_savings_aic'
+          ),
+          optimizationOverheadAic: comparisonNumber(
+            row.optimization_overhead_aic,
+            'optimization_overhead_aic'
+          ),
+          netRealizedSavingsAic: comparisonNumber(
+            row.optimization_net_realized_savings_aic,
+            'optimization_net_realized_savings_aic'
+          ),
+          verifiedNetGain: comparisonNumber(
+            row.optimization_verified_net_gain,
+            'optimization_verified_net_gain'
+          ),
+          attributableOverheadRunIds: optionalStringArray(
+            row.optimization_attributable_overhead_run_ids,
+            'optimization_attributable_overhead_run_ids'
+          ),
+          baselineInputTokens: comparisonNumber(row.optimization_baseline_input_tokens, 'optimization_baseline_input_tokens'),
+          optimizedInputTokens: comparisonNumber(row.optimization_optimized_input_tokens, 'optimization_optimized_input_tokens'),
+          baselineOutputTokens: comparisonNumber(row.optimization_baseline_output_tokens, 'optimization_baseline_output_tokens'),
+          optimizedOutputTokens: comparisonNumber(row.optimization_optimized_output_tokens, 'optimization_optimized_output_tokens'),
+          baselineCacheReadTokens: comparisonNumber(row.optimization_baseline_cache_read_tokens, 'optimization_baseline_cache_read_tokens'),
+          optimizedCacheReadTokens: comparisonNumber(row.optimization_optimized_cache_read_tokens, 'optimization_optimized_cache_read_tokens'),
+          baselineCacheWriteTokens: comparisonNumber(row.optimization_baseline_cache_write_tokens, 'optimization_baseline_cache_write_tokens'),
+          optimizedCacheWriteTokens: comparisonNumber(row.optimization_optimized_cache_write_tokens, 'optimization_optimized_cache_write_tokens'),
+          baselineReasoningTokens: comparisonNumber(row.optimization_baseline_reasoning_tokens, 'optimization_baseline_reasoning_tokens'),
+          optimizedReasoningTokens: comparisonNumber(row.optimization_optimized_reasoning_tokens, 'optimization_optimized_reasoning_tokens'),
+          maturityAt: optionalTimestamp(row.optimization_maturity_at, 'optimization_maturity_at'),
+          maturityStatus: optionalString(row.optimization_maturity_status),
+          evidenceCutoff: optionalTimestamp(row.optimization_evidence_cutoff, 'optimization_evidence_cutoff'),
+          evidenceLinks: optionalStringArray(row.optimization_evidence_links, 'optimization_evidence_links'),
           recommendationChurnCount: optionalNumber(
             row.optimization_recommendation_churn_count,
             'optimization_recommendation_churn_count'
@@ -283,7 +388,7 @@ export function adaptSqlExport(input) {
           evidenceState: optionalEnum(
             row.optimization_evidence_state,
             'optimization_evidence_state',
-            ['complete', 'incomplete', 'unavailable']
+            ['complete', 'incomplete', 'incomparable', 'unmatured', 'unavailable']
           ),
           missingReason: optionalString(row.optimization_missing_reason),
           safeOutputId: optionalString(row.optimization_safe_output_id),
@@ -367,6 +472,37 @@ export function adaptSqlExport(input) {
           data.safeOutputUrl = requiredString(
             data.safeOutputUrl,
             'optimization_safe_output_url'
+          );
+        }
+        if (comparison) {
+          data.costGrain = requiredString(data.costGrain, 'optimization_cost_grain');
+          data.controlVariant = requiredString(data.controlVariant, 'optimization_control_variant');
+          data.optimizedVariant = requiredString(data.optimizedVariant, 'optimization_optimized_variant');
+          data.verifierRunAttempt = positiveInteger(
+            data.verifierRunAttempt,
+            'optimization_verifier_run_attempt'
+          );
+          data.verifierWorkflowPath = requiredString(
+            data.verifierWorkflowPath,
+            'optimization_verifier_workflow_path'
+          );
+          data.verifierWorkflowName = requiredString(
+            data.verifierWorkflowName,
+            'optimization_verifier_workflow_name'
+          );
+          data.implementationChangeId = requiredString(
+            data.implementationChangeId,
+            'optimization_implementation_change_id'
+          );
+          data.evidenceState = requiredString(data.evidenceState, 'optimization_evidence_state');
+          data.maturityAt = canonicalTimestamp(data.maturityAt, 'optimization_maturity_at');
+          data.maturityStatus = requiredString(
+            data.maturityStatus,
+            'optimization_maturity_status'
+          );
+          data.evidenceCutoff = canonicalTimestamp(
+            data.evidenceCutoff,
+            'optimization_evidence_cutoff'
           );
         }
         break;

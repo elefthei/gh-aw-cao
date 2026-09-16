@@ -47,6 +47,9 @@ on:
       experiment_id:
         required: true
         type: string
+      evaluator_digest:
+        required: true
+        type: string
       opportunity_kind:
         required: true
         type: string
@@ -89,6 +92,8 @@ jobs:
       token_eligible: ${{ steps.token_eligibility.outputs.eligible }}
       token_reason: ${{ steps.token_eligibility.outputs.reason }}
     pre-steps:
+      - name: Checkout control repository
+        uses: actions/checkout@v7.0.1
       - name: Validate frozen token-efficiency assignment
         id: token_eligibility
         env:
@@ -98,6 +103,7 @@ jobs:
           EVIDENCE_WINDOW_END: ${{ inputs.evidence_window_end }}
           ASSIGNMENT_RUN_ID: ${{ inputs.assignment_run_id }}
           EXPERIMENT_ID: ${{ inputs.experiment_id }}
+          EVALUATOR_DIGEST: ${{ inputs.evaluator_digest }}
           OPPORTUNITY_KIND: ${{ inputs.opportunity_kind }}
           EVIDENCE_COMPLETE: ${{ inputs.evidence_complete }}
           EVIDENCE_CONFIDENCE: ${{ inputs.evidence_confidence }}
@@ -127,6 +133,7 @@ jobs:
             --arg evidenceWindowEnd "$EVIDENCE_WINDOW_END" \
             --arg assignmentRunId "$ASSIGNMENT_RUN_ID" \
             --arg experimentId "$EXPERIMENT_ID" \
+            --arg evaluatorDigest "$EVALUATOR_DIGEST" \
             --arg opportunityKind "$OPPORTUNITY_KIND" \
             --arg evidenceConfidence "$EVIDENCE_CONFIDENCE" \
             --arg evidenceProvenance "$EVIDENCE_PROVENANCE_JSON" \
@@ -141,6 +148,7 @@ jobs:
               evidenceWindowEnd: $evidenceWindowEnd,
               assignmentRunId: $assignmentRunId,
               experimentId: $experimentId,
+              evaluatorDigest: $evaluatorDigest,
               opportunityKind: $opportunityKind,
               evidenceConfidence: ($evidenceConfidence | tonumber?),
               evidenceProvenance: ($evidenceProvenance | fromjson?),
@@ -151,6 +159,8 @@ jobs:
               then {supersedesInterventionId: $supersedesInterventionId}
               else {}
               end)')"
+          assignment_file=/tmp/gh-aw/token-optimizer/assignment-input.json
+          printf '%s\n' "$assignment" > "$assignment_file"
 
           if [ "$EVIDENCE_COMPLETE" != "true" ]; then
             reason=evidence-not-complete
@@ -165,6 +175,7 @@ jobs:
               and ((.evidenceWindowStart | fromdateiso8601) < (.evidenceWindowEnd | fromdateiso8601))
               and (.assignmentRunId | test("^[0-9]+$"))
               and (.experimentId | test("^[A-Za-z0-9][A-Za-z0-9._:-]*$"))
+              and (.evaluatorDigest | test("^[0-9a-f]{64}$"))
               and (.opportunityKind | IN(
                 "avoidable-agent-invocation",
                 "deterministic-data-gathering",
@@ -182,13 +193,33 @@ jobs:
               and (all(.evidenceProvenance[];
                 (.source | type == "string" and length > 0)
                 and (.runId | type == "string" and test("^[0-9]+$"))
-                and .costGrain == "invocation"
+                and .costGrain == "run-aggregate"
               ))
               and (.attributableRunIds | type == "array" and length > 0)
               and (all(.attributableRunIds[]; type == "string" and test("^[0-9]+$")))
             ' <<<"$assignment" >/dev/null; then
             reason=invalid-assignment
+          elif [ -f activity/token-efficiency-assignment.mjs ]; then
+            assignment_validator=activity/token-efficiency-assignment.mjs
+          elif [ -f .github/aw/activity/token-efficiency-assignment.mjs ]; then
+            assignment_validator=.github/aw/activity/token-efficiency-assignment.mjs
           else
+            assignment_validator=
+          fi
+
+          if [ "$reason" = incomplete-evidence ]; then
+            if [ -z "$assignment_validator" ] \
+                || ! node "$assignment_validator" \
+                  --assignment "$assignment_file" \
+                  --shard-dir "$RUNNER_TEMP/cao-activity/gh-aw-logs-shards" \
+                  --control-repository "$GITHUB_REPOSITORY"; then
+              reason=assignment-not-authoritative
+            else
+              reason=assignment-authoritative
+            fi
+          fi
+
+          if [ "$reason" = assignment-authoritative ]; then
             opportunity_id="$(jq -r '
               "token-opportunity:\(.targetRepo | @uri):\(.workflowPath | @uri):\(.evidenceWindowStart | fromdateiso8601 | strftime("%Y-%m-%dT%H:%M:%SZ")):\(.evidenceWindowEnd | fromdateiso8601 | strftime("%Y-%m-%dT%H:%M:%SZ")):\(.assignmentRunId):\(.experimentId | @uri)"
             ' <<<"$assignment")"
@@ -237,7 +268,7 @@ jobs:
               eligible=true
               reason=eligible
               jq --arg opportunityId "$opportunity_id" \
-                '. + {opportunityId: $opportunityId, evidenceState: "complete", costGrain: "invocation"}' \
+                '. + {opportunityId: $opportunityId, evidenceState: "complete", costGrain: "run-aggregate"}' \
                 <<<"$assignment" > /tmp/gh-aw/token-optimizer/opportunity.json
             fi
           fi
@@ -324,6 +355,7 @@ post-steps:
       EVIDENCE_WINDOW_END: ${{ inputs.evidence_window_end }}
       ASSIGNMENT_RUN_ID: ${{ inputs.assignment_run_id }}
       EXPERIMENT_ID: ${{ inputs.experiment_id }}
+      EVALUATOR_DIGEST: ${{ inputs.evaluator_digest }}
       OPPORTUNITY_KIND: ${{ inputs.opportunity_kind }}
       EVIDENCE_CONFIDENCE: ${{ inputs.evidence_confidence }}
       EVIDENCE_PROVENANCE_JSON: ${{ inputs.evidence_provenance_json }}
@@ -363,6 +395,7 @@ post-steps:
         --arg evidenceWindowEnd "$EVIDENCE_WINDOW_END" \
         --arg assignmentRunId "$ASSIGNMENT_RUN_ID" \
         --arg experimentId "$EXPERIMENT_ID" \
+        --arg evaluatorDigest "$EVALUATOR_DIGEST" \
         --arg opportunityKind "$OPPORTUNITY_KIND" \
         --arg opportunityId "$opportunity_id" \
         --arg interventionId "$intervention_id" \
@@ -387,13 +420,23 @@ post-steps:
           opportunityId: $opportunityId,
           evidenceState: "complete",
           evidenceConfidence: ($evidenceConfidence | tonumber),
-          costGrain: "invocation",
+          costGrain: "run-aggregate",
           evidenceProvenance: ($evidenceProvenance | fromjson),
           interventionId: $interventionId,
           interventionState: "proposed",
           recommendationDisposition: "unapplied",
           controlVariant: "control",
           optimizedVariant: "optimized",
+          verificationContract: {
+            evaluatorDigest: $evaluatorDigest,
+            costGrain: "run-aggregate",
+            controlVariant: "control",
+            optimizedVariant: "optimized",
+            workloadComparisonKey: "accepted-target-outcome:v1",
+            acceptanceRuleDigest: "authoritative-accepted-target-outcome:v1",
+            minimumSampleSize: 2,
+            minimumMaturityDays: 14
+          },
           proposedSavingsAic: ($proposedSavingsAic | tonumber),
           attributableRunIds: (($attributableRunIds | fromjson) + [$optimizerRunId] | unique)
         }
