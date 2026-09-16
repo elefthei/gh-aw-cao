@@ -18,6 +18,11 @@ evidence to confirm the result.
 
 ## What Overview shows
 
+<div class="docs-theme-diagram">
+	<img class="docs-theme-diagram-light" alt="Overview page composition with Header, Rhythm, Floor, and four Station components" src="/gh-aw-cao/assets/dashboard-overview-desktop-light.svg">
+	<img class="docs-theme-diagram-dark" alt="Overview page composition with Header, Rhythm, Floor, and four Station components" src="/gh-aw-cao/assets/dashboard-overview-desktop-dark.svg">
+</div>
+
 | Dashboard area | What it tells you |
 | --- | --- |
 | **Repositories in scope** | How many repositories appear in the retained `repositories` data. Review and live totals appear only when CAO has observed a `rollout-mode`. |
