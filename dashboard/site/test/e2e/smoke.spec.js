@@ -811,7 +811,7 @@ test('Runs renders a last-week swimlane above its responsive table and scrolls l
   await expect.poll(async () => scroll.locator(':scope > .table-filter').evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
 });
 
-test('a mobile page combining a chart with a full-view table switches between the two layouts', async ({ page }) => {
+test('a mobile page combining a chart with a full-view table switches between chart, table, and card layouts', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.setContent(`
     <div id="root"></div>
@@ -897,6 +897,14 @@ test('a mobile page combining a chart with a full-view table switches between th
   await expect(scroll).toBeVisible();
   await expect(dashboardRoot).toHaveClass(/dashboard-full-view/);
   await expect(page.locator('.org-sidebar')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Show card list view' }).click();
+  await expect(chart).toBeHidden();
+  await expect(scroll).toBeHidden();
+  await expect(page.locator('[data-mobile-card-list]')).toBeVisible();
+  await expect(page.locator('[data-mobile-card-list] .entity-card-list-card').first()).toBeVisible();
+  await expect(page.locator('[data-mobile-card-list] .entity-card-list-card').first()).toContainText('copilot / model-1');
+  await expect(dashboardRoot).not.toHaveClass(/dashboard-full-view/);
 
   await page.getByRole('button', { name: 'Show chart view' }).click();
   await expect(chart).toBeVisible();
@@ -4856,7 +4864,7 @@ test('phone navigation uses overview actions and a full-label view menu without 
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });
 
-test('phone pages toggle between chart and full-view lazy table modes', async ({ page }) => {
+test('phone pages toggle between chart, full-view table, and card-list modes', async ({ page }) => {
   const presenterModuleUrl = buildPresenterModuleUrl();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.setContent(`
@@ -4926,10 +4934,97 @@ test('phone pages toggle between chart and full-view lazy table modes', async ({
 
   await toggle.click();
 
-  await expect(page.getByRole('button', { name: 'Show chart view' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Show chart view' }).locator('.octicon-graph')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Show card list view' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Show card list view' }).locator('.octicon-stack')).toBeVisible();
   await expect(chart).toBeHidden();
   await expect(table).toBeVisible();
   await expect(root).toHaveClass(/dashboard-full-view/);
   await expect.poll(() => page.evaluate(() => localStorage.getItem('central-agentic-ops.dashboard.mobile-view-mode'))).toBe('table');
+
+  await page.getByRole('button', { name: 'Show card list view' }).click();
+  await expect(page.getByRole('button', { name: 'Show chart view' }).locator('.octicon-graph')).toBeVisible();
+  await expect(chart).toBeHidden();
+  await expect(table.locator('.table-region')).toBeHidden();
+  await expect(table.locator('[data-mobile-card-list]')).toBeVisible();
+  await expect(root).not.toHaveClass(/dashboard-full-view/);
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('central-agentic-ops.dashboard.mobile-view-mode'))).toBe('card');
+});
+
+test('phone full-view lazy tables switch between table and card-list modes', async ({ page }) => {
+  const presenterModuleUrl = buildPresenterModuleUrl();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setContent(`
+    <div id="root"></div>
+    <script type="module">
+      import { renderDashboard } from ${JSON.stringify(presenterModuleUrl)};
+      document.querySelector('#root').append(renderDashboard({
+        document: {
+          languageVersion: '0.1.0',
+          dashboard: {
+            id: 'phone-table-card-dashboard',
+            title: 'Phone Table Cards',
+            'card-templates': [{
+              id: 'repository',
+              icon: 'repo',
+              title: { field: 'repository-coordinate' },
+              labels: [],
+              details: [{ field: 'organization', title: 'Organization' }]
+            }],
+            pages: [{
+              id: 'repositories',
+              kind: 'custom',
+              title: 'Repositories',
+              views: [{
+                id: 'repositories-table',
+                title: 'Repositories',
+                data: { source: 'repositories' },
+                mark: 'table',
+                controls: 'interactive',
+                'lazy-list': true,
+                layout: 'full-view',
+                encoding: {
+                  columns: [
+                    { field: 'repository-coordinate', type: 'nominal', title: 'Repository' },
+                    { field: 'organization', type: 'nominal', title: 'Organization' }
+                  ]
+                }
+              }]
+            }]
+          }
+        },
+        sources: {
+          repositories: {
+            source: 'repositories',
+            rows: [{
+              'repository-coordinate': 'githubnext/gh-aw-cao',
+              organization: 'githubnext'
+            }],
+            metadata: {
+              availability: 'available',
+              completeness: 'complete',
+              freshness: 'fresh'
+            }
+          }
+        }
+      }));
+    </script>
+  `);
+
+  const root = page.locator('.dashboard-root');
+  const table = page.locator('[data-view-id="repositories-table"] .table-region');
+  const cards = page.locator('[data-mobile-card-list]');
+  await expect(table).toBeVisible();
+  await expect(cards).toBeHidden();
+  await expect(root).toHaveClass(/dashboard-full-view/);
+
+  await page.getByRole('button', { name: 'Show card list view' }).click();
+  await expect(table).toBeHidden();
+  await expect(cards).toBeVisible();
+  await expect(cards.locator('.entity-card-list-card')).toContainText('githubnext/gh-aw-cao');
+  await expect(root).not.toHaveClass(/dashboard-full-view/);
+
+  await page.getByRole('button', { name: 'Show table view' }).click();
+  await expect(table).toBeVisible();
+  await expect(cards).toBeHidden();
+  await expect(root).toHaveClass(/dashboard-full-view/);
 });
