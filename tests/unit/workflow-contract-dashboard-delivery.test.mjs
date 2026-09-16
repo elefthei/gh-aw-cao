@@ -27,7 +27,6 @@ test("shared activity cache restores into activation and agent jobs", () => {
     "optimization-ai-credit-auditor.md",
     "optimization-ai-credit-optimizer.md",
     "optimization-token-optimizer.md",
-    "optimization-token-efficiency-verifier.md",
     "self-care-open-source-failures.md",
   ]) {
     assert.match(workflow(name), /uses: shared\/activity-cache\.md/, name);
@@ -358,18 +357,6 @@ test("Activity package owns the shared collected-data cache contract", () => {
       source: "token-intervention-lifecycle.mjs",
       destination: ".github/aw/activity/token-intervention-lifecycle.mjs",
     },
-    {
-      source: "token-efficiency-verifier.mjs",
-      destination: ".github/aw/activity/token-efficiency-verifier.mjs",
-    },
-    {
-      source: "token-efficiency-grader-evidence.mjs",
-      destination: ".github/aw/activity/token-efficiency-grader-evidence.mjs",
-    },
-    {
-      source: "token-efficiency-assignment.mjs",
-      destination: ".github/aw/activity/token-efficiency-assignment.mjs",
-    },
     { source: "gh-aw-logs.mjs", destination: ".github/aw/activity/gh-aw-logs.mjs" },
     { source: "inventory.mjs", destination: ".github/aw/activity/inventory.mjs" },
     { source: "inventory-sources.mjs", destination: ".github/aw/activity/inventory-sources.mjs" },
@@ -566,7 +553,6 @@ test("Dashboard inventory links multiline orchestrator worker lists", () => {
           "optimization-agents-md-curator",
           "optimization-skills-curator",
           "optimization-token-optimizer",
-          "optimization-token-efficiency-verifier",
         ],
       },
       {

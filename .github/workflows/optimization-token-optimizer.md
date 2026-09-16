@@ -92,8 +92,6 @@ jobs:
       token_eligible: ${{ steps.token_eligibility.outputs.eligible }}
       token_reason: ${{ steps.token_eligibility.outputs.reason }}
     pre-steps:
-      - name: Checkout control repository
-        uses: actions/checkout@v7.0.1
       - name: Validate frozen token-efficiency assignment
         id: token_eligibility
         env:
@@ -159,9 +157,6 @@ jobs:
               then {supersedesInterventionId: $supersedesInterventionId}
               else {}
               end)')"
-          assignment_file=/tmp/gh-aw/token-optimizer/assignment-input.json
-          printf '%s\n' "$assignment" > "$assignment_file"
-
           if [ "$EVIDENCE_COMPLETE" != "true" ]; then
             reason=evidence-not-complete
           elif [ -z "$cao_script" ] || [ ! -s "$db" ]; then
@@ -199,27 +194,7 @@ jobs:
               and (all(.attributableRunIds[]; type == "string" and test("^[0-9]+$")))
             ' <<<"$assignment" >/dev/null; then
             reason=invalid-assignment
-          elif [ -f activity/token-efficiency-assignment.mjs ]; then
-            assignment_validator=activity/token-efficiency-assignment.mjs
-          elif [ -f .github/aw/activity/token-efficiency-assignment.mjs ]; then
-            assignment_validator=.github/aw/activity/token-efficiency-assignment.mjs
           else
-            assignment_validator=
-          fi
-
-          if [ "$reason" = incomplete-evidence ]; then
-            if [ -z "$assignment_validator" ] \
-                || ! node "$assignment_validator" \
-                  --assignment "$assignment_file" \
-                  --shard-dir "$RUNNER_TEMP/cao-activity/gh-aw-logs-shards" \
-                  --control-repository "$GITHUB_REPOSITORY"; then
-              reason=assignment-not-authoritative
-            else
-              reason=assignment-authoritative
-            fi
-          fi
-
-          if [ "$reason" = assignment-authoritative ]; then
             opportunity_id="$(jq -r '
               "token-opportunity:\(.targetRepo | @uri):\(.workflowPath | @uri):\(.evidenceWindowStart | fromdateiso8601 | strftime("%Y-%m-%dT%H:%M:%SZ")):\(.evidenceWindowEnd | fromdateiso8601 | strftime("%Y-%m-%dT%H:%M:%SZ")):\(.assignmentRunId):\(.experimentId | @uri)"
             ' <<<"$assignment")"

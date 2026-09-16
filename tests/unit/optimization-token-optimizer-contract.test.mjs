@@ -143,15 +143,6 @@ test("token optimizer is review-only, assignment-scoped, and gated before infere
   assert.match(source, /invalid-supersession-lineage/);
   assert.match(source, /activity-cache-unavailable/);
   assert.match(source, /assigned-runs-unavailable/);
-  assert.match(source, /assignment-not-authoritative/);
-  assert.match(source, /token-efficiency-assignment\.mjs/);
-  assert.match(source, /inputs\.evaluator_digest/);
-  assert.match(source, /\^\[0-9a-f\]\{64\}\$/);
-  assert.match(source, /evaluatorDigest: \$evaluatorDigest/);
-  assert.doesNotMatch(
-    source,
-    /evaluatorDigest: "[0-9a-f]{64}"/,
-  );
   assert.match(source, /targetRepo \| @uri/);
   assert.match(source, /experimentId \| @uri/);
   assert.doesNotMatch(source, /supersedesInterventionId: \(\$supersedesInterventionId \| select/);
@@ -159,8 +150,6 @@ test("token optimizer is review-only, assignment-scoped, and gated before infere
   assert.match(source, /recommendationDisposition: "unapplied"/);
   assert.match(source, /interventionState: "proposed"/);
   assert.match(source, /attributableRunIds: \(\(\$attributableRunIds \| fromjson\) \+ \[\$optimizerRunId\] \| unique\)/);
-  assert.match(source, /verificationContract:/);
-  assert.match(source, /minimumMaturityDays: 14/);
   assert.equal(
     policy["control-plane"].packages.optimization.workers["token-optimizer"]["max-mode"],
     "review",

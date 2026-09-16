@@ -75,33 +75,6 @@ for target_repository in "${repositories[@]}"; do
   fi
 done
 
-grader_evidence_shard="$shard_directory/token-efficiency-operational-values.jsonl"
-grader_evidence_tmp="$grader_evidence_shard.tmp"
-grader_evidence_complete=false
-if [[ $exit_code -eq 0 ]]; then
-  if [[ -f activity/token-efficiency-grader-evidence.mjs ]]; then
-    grader_evidence_script=activity/token-efficiency-grader-evidence.mjs
-  elif [[ -f .github/aw/activity/token-efficiency-grader-evidence.mjs ]]; then
-    grader_evidence_script=.github/aw/activity/token-efficiency-grader-evidence.mjs
-  else
-    grader_evidence_script=
-  fi
-  if [[ -n "$grader_evidence_script" ]] \
-      && node "$grader_evidence_script" \
-        --logs-dir "$output_directory" \
-        --shard-dir "$shard_directory" \
-        --history-file "$grader_evidence_shard" > "$grader_evidence_tmp"; then
-    grader_evidence_complete=true
-  else
-    exit_code=1
-  fi
-fi
-if [[ "$grader_evidence_complete" == true ]]; then
-  mv "$grader_evidence_tmp" "$grader_evidence_shard"
-else
-  rm -f "$grader_evidence_tmp"
-fi
-
 observation_shard="$shard_directory/token-efficiency-observations.jsonl"
 observation_tmp="$observation_shard.tmp"
 : > "$observation_tmp"
@@ -137,7 +110,7 @@ if [[ $exit_code -eq 0 ]]; then
             and (.targetRepo | type == "string")
             and (.workflowPath | type == "string")
             and .evidenceState == "complete"
-            and .costGrain == "run-aggregate"
+            and .costGrain == "invocation"
           ' "$file" >/dev/null 2>&1; then
           jq -c --arg createdAt "$created_at" \
             '{schema_version: 2, kind: "token_efficiency_observation", created_at: $createdAt, observation: .}' \
@@ -230,78 +203,6 @@ if [[ "$lifecycle_complete" == true ]]; then
   mv "$lifecycle_tmp" "$lifecycle_shard"
 else
   rm -f "$lifecycle_tmp"
-fi
-
-comparison_shard="$shard_directory/token-efficiency-comparisons.jsonl"
-comparison_tmp="$comparison_shard.tmp"
-if [[ -f "$comparison_shard" ]]; then
-  cp "$comparison_shard" "$comparison_tmp"
-else
-  : > "$comparison_tmp"
-fi
-comparison_complete=false
-if [[ $exit_code -eq 0 ]]; then
-  if [[ -f activity/token-efficiency-verifier.mjs ]]; then
-    verifier_script=activity/token-efficiency-verifier.mjs
-  elif [[ -f .github/aw/activity/token-efficiency-verifier.mjs ]]; then
-    verifier_script=.github/aw/activity/token-efficiency-verifier.mjs
-  else
-    verifier_script=
-  fi
-  if [[ -z "$verifier_script" ]]; then
-    exit_code=1
-  else
-    set +e
-    gh api --paginate "repos/$repository/actions/artifacts?name=token-efficiency-verification-claim&per_page=100" \
-      --jq '.artifacts[]
-        | select(.expired == false and .name == "token-efficiency-verification-claim")
-        | select((now - (.created_at | fromdateiso8601)) <= 90 * 86400)
-        | [.id, .workflow_run.id, .archive_download_url, .created_at]
-        | @tsv' \
-      | sort -t $'\t' -k4,4 \
-      | while IFS=$'\t' read -r artifact_id workflow_run_id archive_url created_at; do
-          [[ -n "$artifact_id" && -n "$workflow_run_id" && -n "$archive_url" ]] || continue
-          if ! workflow_path="$(gh api "repos/$repository/actions/runs/$workflow_run_id" --jq '.path')"; then
-            exit 1
-          fi
-          [[ "$workflow_path" == ".github/workflows/optimization-token-efficiency-verifier.lock.yml" ]] || continue
-          archive="$output_directory/token-efficiency-verification-claim-$artifact_id.zip"
-          extracted="$output_directory/token-efficiency-verification-claim-$artifact_id"
-          if ! gh api "$archive_url" > "$archive"; then
-            exit 1
-          fi
-          mkdir -p "$extracted"
-          if ! unzip -qq -o "$archive" -d "$extracted"; then
-            exit 1
-          fi
-          claim="$extracted/token-efficiency-verification-claim.json"
-          if ! jq -e --arg run "$workflow_run_id" --arg repository "$repository" '
-              .schemaVersion == 1
-              and .verifierRunId == $run
-              and .controlRepository == $repository
-            ' "$claim" >/dev/null 2>&1; then
-            exit 1
-          fi
-          if ! node "$verifier_script" \
-              --claim "$claim" \
-              --shard-dir "$shard_directory" \
-              --history-file "$comparison_tmp" >> "$comparison_tmp"; then
-            exit 1
-          fi
-        done
-    comparison_status=("${PIPESTATUS[@]}")
-    set -e
-    if [[ ${comparison_status[0]} -eq 0 && ${comparison_status[1]} -eq 0 && ${comparison_status[2]} -eq 0 ]]; then
-      comparison_complete=true
-    else
-      exit_code=1
-    fi
-  fi
-fi
-if [[ "$comparison_complete" == true ]]; then
-  mv "$comparison_tmp" "$comparison_shard"
-else
-  rm -f "$comparison_tmp"
 fi
 
 printf '%s\n' "$exit_code" > "$exit_code_path"

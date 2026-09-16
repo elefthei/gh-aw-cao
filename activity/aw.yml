@@ -19,12 +19,6 @@ resources:
     destination: .github/aw/activity/collect-logs.sh
   - source: token-intervention-lifecycle.mjs
     destination: .github/aw/activity/token-intervention-lifecycle.mjs
-  - source: token-efficiency-verifier.mjs
-    destination: .github/aw/activity/token-efficiency-verifier.mjs
-  - source: token-efficiency-grader-evidence.mjs
-    destination: .github/aw/activity/token-efficiency-grader-evidence.mjs
-  - source: token-efficiency-assignment.mjs
-    destination: .github/aw/activity/token-efficiency-assignment.mjs
   - source: gh-aw-logs.mjs
     destination: .github/aw/activity/gh-aw-logs.mjs
   - source: inventory.mjs
