@@ -458,6 +458,56 @@ describe('canonical view sources', () => {
           proposedSavingsAic: 12.5,
           attributableRunIds: ['1185999', '1186001']
         }
+      },
+      {
+        schema_version: 2,
+        kind: 'token_efficiency_lifecycle_observation',
+        observation: {
+          schemaVersion: 1,
+          lifecycleObservationId: 'token-lifecycle:accepted-1',
+          observedAt: '2026-09-16T04:02:00Z',
+          controlRepository: 'githubnext/gh-aw-cao',
+          claimRunId: '1189001',
+          claimRunAttempt: 1,
+          actor: 'maintainer',
+          optimizerRunId: '1186001',
+          optimizerRunAttempt: 1,
+          optimizerWorkflowPath: '.github/workflows/optimization-token-optimizer.md',
+          optimizerWorkflowName: 'AW Optimization / Token Optimizer',
+          targetRepo: 'octo/example',
+          workflowPath: '.github/workflows/review.md',
+          opportunityId: 'token-opportunity:octo/example:.github/workflows/review.md:2026-09-01T00:00:00Z:2026-09-08T00:00:00Z:1185999:review-context-v1',
+          interventionId: 'token-intervention:review-context-v1:1186001',
+          experimentId: 'review-context-v1',
+          controlVariant: 'control',
+          optimizedVariant: 'optimized',
+          proposedSavingsAic: 12.5,
+          previousInterventionState: 'proposed',
+          interventionState: 'running',
+          previousRecommendationDisposition: 'unapplied',
+          recommendationDisposition: 'applied',
+          evidenceState: 'complete',
+          safeOutputId: 'github:issue:githubnext/gh-aw-cao:11861',
+          safeOutputUrl: 'https://github.com/githubnext/gh-aw-cao/issues/11861',
+          implementationChangeId: 'github:pull-request:octo/example:42',
+          implementationPullRequestUrl: 'https://github.com/octo/example/pull/42',
+          implementationRunIds: ['1187001'],
+          acceptedAt: '2026-09-15T06:00:00Z',
+          implementationStartedAt: '2026-09-15T07:00:00Z',
+          implementationCompletedAt: '2026-09-16T04:00:00Z',
+          sourceProvenance: {
+            kind: 'workflow-dispatch-claim',
+            sourceId: 'github-actions-run:githubnext/gh-aw-cao:1189001:attempt:1',
+            sourceSchemaRevision: 1,
+            generation: 'github-actions-run:githubnext/gh-aw-cao:1189001:attempt:1',
+            completeness: 'complete',
+            freshness: 'fresh',
+            evidenceLinks: [
+              'https://github.com/githubnext/gh-aw-cao/issues/11861',
+              'https://github.com/octo/example/pull/42'
+            ]
+          }
+        }
       }
     ];
     await ingestCachedGhAwJsonl(indexedDB, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`, {
@@ -489,8 +539,42 @@ describe('canonical view sources', () => {
         'recommendation-disposition': 'unapplied',
         'proposed-savings-aic': 12.5,
         'issue-link': 'https://github.com/githubnext/gh-aw-cao/issues/11861'
+      }),
+      expect.objectContaining({
+        organization: 'octo',
+        repository: 'example',
+        'lifecycle-observation-id': 'token-lifecycle:accepted-1',
+        'previous-intervention-state': 'proposed',
+        'intervention-state': 'running',
+        'recommendation-disposition': 'applied',
+        experiment: 'review-context-v1',
+        'proposed-savings-aic': 12.5,
+        'safe-output-id': 'github:issue:githubnext/gh-aw-cao:11861',
+        'implementation-change-id': 'github:pull-request:octo/example:42',
+        'implementation-run-ids': ['1187001'],
+        'implementation-completed-at': '2026-09-16T04:00:00.000Z',
+        'issue-link': 'https://github.com/githubnext/gh-aw-cao/issues/11861',
+        'pull-request-link': 'https://github.com/octo/example/pull/42'
       })
     ]);
+    const latest = executeDashboardQueries([{
+      name: 'latest-token-intervention',
+      from: 'token-efficiency-interventions',
+      select: [
+        { field: 'intervention-id' },
+        { field: 'intervention-state' },
+        { field: 'recommendation-disposition' },
+        { field: 'observed-at' }
+      ],
+      'order-by': [{ field: 'observed-at', direction: 'desc' }],
+      limit: 1
+    }], projected, ['latest-token-intervention']);
+    expect(latest['latest-token-intervention'].rows).toEqual([{
+      'intervention-id': 'token-intervention:review-context-v1:1186001',
+      'intervention-state': 'running',
+      'recommendation-disposition': 'applied',
+      'observed-at': '2026-09-16T04:02:00.000Z'
+    }]);
   });
 
   it('projects sessions with run and repository context even when events are not requested', async () => {

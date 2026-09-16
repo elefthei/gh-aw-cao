@@ -177,3 +177,20 @@ test("token optimizer observations use the Activity JSONL boundary, not issue te
   assert.match(sources, /source: 'token-efficiency-interventions'/);
   assert.doesNotMatch(adapter, /token_efficiency[\s\S]{0,1000}(title|body)/i);
 });
+
+test("token intervention tracking is deterministic, read-only, and package-owned", () => {
+  const tracker = readFileSync(
+    join(root, ".github", "workflows", "optimization-token-intervention-tracker.yml"),
+    "utf8",
+  );
+  const manifest = readFileSync(join(root, "optimization", "aw.yml"), "utf8");
+  const activityManifest = readFileSync(join(root, "activity", "aw.yml"), "utf8");
+
+  assert.match(tracker, /workflow_dispatch:/);
+  assert.match(tracker, /decision:/);
+  assert.match(tracker, /token-efficiency-lifecycle-claim/);
+  assert.match(tracker, /permissions:\n  actions: read\n  contents: read/);
+  assert.doesNotMatch(tracker, /\bwrite\b|safe-outputs:|create-issue:|create-pull-request:/);
+  assert.match(manifest, /optimization-token-intervention-tracker\.yml/);
+  assert.match(activityManifest, /token-intervention-lifecycle\.mjs/);
+});

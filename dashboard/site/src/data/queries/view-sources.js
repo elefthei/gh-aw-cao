@@ -385,7 +385,10 @@ function tokenEfficiencySources(events, sessionsById, runsById, sources) {
     .map(({ event, issue, common }) => definedFields({
       ...common,
       'intervention-id': event.interventionId,
+      'lifecycle-observation-id': event.lifecycleObservationId,
+      'previous-intervention-state': event.previousInterventionState,
       'intervention-state': event.interventionState,
+      'previous-recommendation-disposition': event.previousRecommendationDisposition,
       'recommendation-disposition': event.recommendationDisposition,
       'supersedes-intervention-id': event.supersedesInterventionId,
       'superseded-by-intervention-id': event.supersededByInterventionId,
@@ -394,8 +397,18 @@ function tokenEfficiencySources(events, sessionsById, runsById, sources) {
       'control-variant': event.controlVariant,
       'optimized-variant': event.optimizedVariant,
       'proposed-savings-aic': event.proposedSavingsAic,
+      'evidence-state': event.evidenceState,
+      'missing-reason': event.missingReason,
+      'safe-output-id': event.safeOutputId,
+      'implementation-change-id': event.implementationChangeId,
+      'implementation-run-ids': event.implementationRunIds,
       'accepted-at': event.acceptedAt,
-      'issue-link': issue?.correlationId
+      'implementation-started-at': event.implementationStartedAt,
+      'implementation-completed-at': event.implementationCompletedAt,
+      'rejected-at': event.rejectedAt,
+      'superseded-at': event.supersededAt,
+      'issue-link': event.safeOutputUrl ?? issue?.correlationId,
+      'pull-request-link': event.implementationPullRequestUrl
     }));
   return {
     opportunities: {
