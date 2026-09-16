@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { primerStylesheet } from '../../src/styles.js';
 
 describe('DLS-CONF-004 scaffold gates', () => {
   it('DLS-CONF-004 initializes the presenter workspace tooling', () => {
@@ -129,6 +130,33 @@ describe('DLS-CONF-004 scaffold gates', () => {
 
     expect(styles).toContain('-webkit-text-size-adjust: 100%;');
     expect(styles).toContain('text-size-adjust: 100%;');
+  });
+
+  it('uses the Primer body font size on mobile', () => {
+    const style = document.createElement('style');
+    style.textContent = primerStylesheet();
+    document.head.append(style);
+    try {
+      const stylesheet = style.sheet;
+      if (!stylesheet) throw new Error('Primer stylesheet did not parse');
+      const mobileBodySelectors = new Set();
+      for (const rule of stylesheet.cssRules) {
+        if (rule.type !== window.CSSRule.MEDIA_RULE) continue;
+        const mediaRule = /** @type {CSSMediaRule} */ (rule);
+        if (mediaRule.conditionText.replace(/\s/g, '') !== '(max-width:700px)') continue;
+        for (const nestedRule of mediaRule.cssRules) {
+          if (nestedRule.type !== window.CSSRule.STYLE_RULE) continue;
+          const styleRule = /** @type {CSSStyleRule} */ (nestedRule);
+          if (!styleRule.selectorText || styleRule.style.getPropertyValue('font-size') !== '1rem') continue;
+          for (const selector of styleRule.selectorText.split(',')) mobileBodySelectors.add(selector.trim());
+        }
+      }
+
+      expect(mobileBodySelectors.has('body')).toBe(true);
+      expect(mobileBodySelectors.has('.dashboard-root')).toBe(true);
+    } finally {
+      style.remove();
+    }
   });
 
   it('keeps reset confirmation dialog height content-sized on mobile', () => {
