@@ -869,8 +869,8 @@
         ]
       },
       {
-        "name": "marketplace-operations",
-        "intent": "List operation packages and standalone workflows as reusable Marketplace cards with package membership, ownership, workflow state, and dashboard navigation.",
+        "name": "marketplace-operation-groups",
+        "intent": "Group declared workflows by operation package or standalone workflow with ownership, workflow state, and a dashboard navigation route.",
         "from": "workflows",
         "compute": [
           {
@@ -988,15 +988,6 @@
               { "value": "View " },
               { "field": "operation-name" }
             ]
-          },
-          {
-            "as": "operation-link",
-            "function": "dashboard-link",
-            "args": [
-              { "field": "repository-link" },
-              { "field": "operation-dashboard-href" },
-              { "field": "operation-link-label" }
-            ]
           }
         ],
         "aggregate": {
@@ -1007,7 +998,10 @@
             "operation-kind",
             "operation-description",
             "owner",
-            "operation-link"
+            "organization",
+            "repository",
+            "operation-dashboard-href",
+            "operation-link-label"
           ],
           "values": [
             { "field": "workflow", "as": "workflow-count", "reducer": "count" },
@@ -1015,6 +1009,48 @@
             { "field": "workflow-active", "as": "workflow-states", "reducer": "distinct-values" }
           ]
         },
+        "select": [
+          { "field": "operation-id" },
+          { "field": "operation-name" },
+          { "field": "operation-icon" },
+          { "field": "operation-kind" },
+          { "field": "operation-description" },
+          { "field": "owner" },
+          { "field": "organization" },
+          { "field": "repository" },
+          { "field": "operation-dashboard-href" },
+          { "field": "operation-link-label" },
+          { "field": "workflow-count" },
+          { "field": "workflow-roles" },
+          { "field": "workflow-states" }
+        ]
+      },
+      {
+        "name": "marketplace-operations",
+        "intent": "List operation packages and standalone workflows as reusable Marketplace cards with package membership, ownership, workflow state, and dashboard navigation.",
+        "from": "marketplace-operation-groups",
+        "joins": [
+          {
+            "source": "repositories",
+            "type": "left",
+            "on": [
+              { "left": "organization", "right": "organization" },
+              { "left": "repository", "right": "repository" }
+            ],
+            "fields": [{ "field": "repository-link", "as": "repository-link" }]
+          }
+        ],
+        "compute": [
+          {
+            "as": "operation-link",
+            "function": "dashboard-link",
+            "args": [
+              { "field": "repository-link" },
+              { "field": "operation-dashboard-href" },
+              { "field": "operation-link-label" }
+            ]
+          }
+        ],
         "select": [
           { "field": "operation-id" },
           { "field": "operation-name" },
