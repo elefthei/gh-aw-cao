@@ -274,81 +274,31 @@ function workflowsSource(workflows, repositoriesById, sources) {
   };
 }
 
-/**
- * @param {Record<string, unknown>[]} jobs
- * @param {Map<unknown, Record<string, unknown>>} runsById
- * @param {Record<string, unknown>} sources
- */
-function jobsSource(jobs, runsById, sources) {
-  const publishedJobs = new Map(sourceRows(sources['job-performance']).map((job) => [
-    [job.organization, job.repository, job.run, job['run-attempt'] ?? 1, job['job-id']].map(normalizedKey).join(':'),
-    job
-  ]));
-  return {
-    source: 'job-performance',
-    rows: jobs.map((job) => {
-      const run = runsById.get(job.runId) ?? {};
-      return {
-        ...(publishedJobs.get([
-          run.owner,
-          run.repository,
-          run.githubRunId,
-          run.attempt ?? 1,
-          job.githubJobId
-        ].map(normalizedKey).join(':')) ?? {}),
-        organization: run.owner,
-        repository: run.repository,
-        workflow: run.workflowPath,
-        run: String(run.githubRunId ?? ''),
-        'run-attempt': run.attempt,
-        'run-conclusion': job.runConclusion,
-        'rollout-mode': job.rolloutMode,
-        'job-id': job.githubJobId,
-        job: job.name,
-        'job-status': job.status,
-        'job-conclusion': job.conclusion,
-        'job-duration-seconds': job.durationSeconds,
-        'started-at': job.startedAt,
-        runner: job.runner,
-        'runner-name': job.runnerName,
-        'runner-group': job.runnerGroup,
-        'sandbox-runtime': job.sandboxRuntime,
-        engine: job.engine,
-        model: job.model,
-        'run-link': job.runLink
-      };
-    }),
-    metadata: projectionMetadata(sources, 'job-performance', 'job-performance', true)
-  };
-}
-
 /** @param {Record<string, unknown>} record */
 function definedFields(record) {
   return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
 }
 
 /**
- * Projects retained canonical events with their session, run, and repository
+ * Projects retained canonical events with their run and repository
  * context so event-backed views survive partial collections.
  *
  * @param {Record<string, unknown>[]} events
- * @param {Map<unknown, Record<string, unknown>>} sessionsById
  * @param {Map<unknown, Record<string, unknown>>} runsById
  * @param {Record<string, unknown>} sources
  */
-function eventsSource(events, sessionsById, runsById, sources) {
+function eventsSource(events, runsById, sources) {
   const publishedEvents = new Map(sourceRows(sources.events).map((event) => [
     normalizedKey(event.event),
     event
   ]));
   const ordered = [...events].sort((left, right) =>
-    String(left.sessionId).localeCompare(String(right.sessionId))
+    String(left.runId).localeCompare(String(right.runId))
     || Number(left.sequence) - Number(right.sequence));
   return {
     source: 'events',
     rows: ordered.map((event) => {
-      const session = sessionsById.get(event.sessionId) ?? {};
-      const run = runsById.get(session.runId) ?? {};
+      const run = runsById.get(event.runId) ?? {};
       return {
         ...(publishedEvents.get(normalizedKey(event.id)) ?? {}),
         ...definedFields({
@@ -357,7 +307,6 @@ function eventsSource(events, sessionsById, runsById, sources) {
           workflow: run.workflowPath,
           run: run.githubRunId === undefined ? undefined : String(run.githubRunId),
           'run-attempt': run.attempt,
-          session: event.sessionId,
           event: event.id,
           'event-timestamp': event.timestamp,
           'event-source': event.source,
@@ -433,15 +382,13 @@ function eventsSource(events, sessionsById, runsById, sources) {
  * Projects retained canonical MCP call events when no published MCP source is available.
  *
  * @param {Record<string, unknown>[]} events
- * @param {Map<unknown, Record<string, unknown>>} sessionsById
  * @param {Map<unknown, Record<string, unknown>>} runsById
  * @param {Record<string, unknown>} sources
  */
-function mcpCallsSource(events, sessionsById, runsById, sources) {
+function mcpCallsSource(events, runsById, sources) {
   const rows = events.flatMap((event) => {
     if (event.source !== 'mcp' || event.type !== 'tool.call') return [];
-    const session = sessionsById.get(event.sessionId) ?? {};
-    const run = runsById.get(session.runId) ?? {};
+    const run = runsById.get(event.runId) ?? {};
     return [definedFields({
       organization: run.owner,
       repository: run.repository,
@@ -462,40 +409,6 @@ function mcpCallsSource(events, sessionsById, runsById, sources) {
   };
 }
 
-/**
- * Projects canonical sessions with their run and repository context so
- * ingestion-rate queries (imported runs per workflow/repository) can group
- * sessions by organization, repository, workflow, and run.
- *
- * @param {Record<string, unknown>[]} sessions
- * @param {Map<unknown, Record<string, unknown>>} runsById
- * @param {Record<string, unknown>} sources
- */
-function sessionsSource(sessions, runsById, sources) {
-  const rows = sessions.map((session) => {
-    const run = runsById.get(session.runId) ?? {};
-    return definedFields({
-      organization: run.owner,
-      repository: run.repository,
-      workflow: run.workflowPath,
-      run: run.githubRunId === undefined ? undefined : String(run.githubRunId),
-      'run-attempt': run.attempt,
-      session: session.id,
-      'job-id': session.jobId,
-      'session-kind': session.kind,
-      'session-status': session.status,
-      'started-at': session.startedAt,
-      'ended-at': session.completedAt,
-      'observed-at': session.startedAt
-    });
-  });
-  return {
-    source: 'sessions',
-    rows,
-    metadata: canonicalProjectionMetadata(sources, 'sessions', 'sessions', rows.length)
-  };
-}
-
 /** @param {unknown} value */
 function recordValue(value) {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -505,13 +418,11 @@ function recordValue(value) {
 
 /**
  * @param {Record<string, unknown>[]} events
- * @param {Map<unknown, Record<string, unknown>>} sessionsById
  * @param {Map<unknown, Record<string, unknown>>} runsById
  */
-function graderRows(events, sessionsById, runsById) {
+function graderRows(events, runsById) {
   return events.filter((event) => event.type === 'workflow_run_grader').map((event) => {
-    const session = sessionsById.get(event.sessionId) ?? {};
-    const run = runsById.get(session.runId) ?? {};
+    const run = runsById.get(event.runId) ?? {};
     const implementation = recordValue(event.implementation);
     const observation = recordValue(event.observation);
     return {
@@ -688,16 +599,14 @@ function linkNumber(value) {
 
 /**
  * @param {Record<string, unknown>[]} events
- * @param {Map<unknown, Record<string, unknown>>} sessionsById
  * @param {Map<unknown, Record<string, unknown>>} runsById
  * @param {Map<unknown, Record<string, unknown>>} workflowsById
  * @param {Record<string, unknown>} sources
  */
-function outcomesSource(events, sessionsById, runsById, workflowsById, sources) {
+function outcomesSource(events, runsById, workflowsById, sources) {
   const rows = events.flatMap((event) => {
     if (event.type !== 'safe_output.created') return [];
-    const session = sessionsById.get(event.sessionId) ?? {};
-    const run = runsById.get(session.runId ?? event.runId) ?? {};
+    const run = runsById.get(event.runId) ?? {};
     const workflow = workflowsById.get(run.workflowId) ?? {};
     const externalLink = httpsLink(event.correlationId) ?? httpsLink(run.runLink);
     const category = githubOutputCategory(event.githubEntityType ?? event.safeOutputType);
@@ -746,15 +655,13 @@ function outcomesSource(events, sessionsById, runsById, workflowsById, sources) 
 
 /**
  * @param {Record<string, unknown>[]} events
- * @param {Map<unknown, Record<string, unknown>>} sessionsById
  * @param {Map<unknown, Record<string, unknown>>} runsById
  * @param {Record<string, unknown>} sources
  */
-function findingsSource(events, sessionsById, runsById, sources) {
+function findingsSource(events, runsById, sources) {
   const rows = events.flatMap((event) => {
     if (event.type !== 'audit.finding') return [];
-    const session = sessionsById.get(event.sessionId) ?? {};
-    const run = runsById.get(session.runId ?? event.runId) ?? {};
+    const run = runsById.get(event.runId) ?? {};
     return [definedFields({
       organization: run.owner,
       repository: run.repository,
@@ -1027,11 +934,10 @@ function evalSources(graders, sources) {
 
 /**
  * @param {Record<string, unknown>[]} events
- * @param {Map<unknown, Record<string, unknown>>} sessionsById
  * @param {Map<unknown, Record<string, unknown>>} runsById
  * @param {Record<string, unknown>} sources
  */
-function firewallObservationsSource(events, sessionsById, runsById, sources) {
+function firewallObservationsSource(events, runsById, sources) {
   const published = sourceRows(sources['firewall-observations']);
   if (published.length > 0) {
     return {
@@ -1045,8 +951,7 @@ function firewallObservationsSource(events, sessionsById, runsById, sources) {
         || !['net_allowed', 'net_blocked'].includes(String(event.type))
         || typeof event.domain !== 'string'
         || !event.domain) return [];
-    const session = sessionsById.get(event.sessionId) ?? {};
-    const run = runsById.get(session.runId) ?? {};
+    const run = runsById.get(event.runId) ?? {};
     return [{
       organization: run.owner,
       repository: run.repository,
@@ -1231,28 +1136,23 @@ export async function queryCanonicalViewSources(indexedDB, logicalSources, sourc
   const needsMcpCalls = needed.has('mcp-calls') && !sourceRows(logicalSources['mcp-calls']).length;
   const needsOutcomeEvents = ['outcomes', 'findings', 'security-findings', 'detection-observations']
     .some((name) => needed.has(name));
-  const needsSessions = needed.has('sessions') || needsFirewall || needsGraders || needsMcpCalls || needsOutcomeEvents;
   const needsEvents = needed.has('events') || needsFirewall || needsGraders || needsMcpCalls || needsOutcomeEvents;
-  const needsRuns = needed.has('runs') || needed.has('usage') || needed.has('job-performance')
-    || needsSessions || needsEvents;
+  const needsRuns = needed.has('runs') || needed.has('usage') || needsEvents;
   const needsWorkflows = needed.has('workflows') || needsRuns || needed.has('outcomes') || needed.has('work-items');
   const needsRepositories = needed.has('repositories') || needsWorkflows;
-  const [packages, repositories, workflows, runs, jobs, failedRuns, sessions, events, transactions] = await Promise.all([
+  const [packages, repositories, workflows, runs, failedRuns, events, transactions] = await Promise.all([
     needed.has('packages') ? queries.packages.list() : [],
     needsRepositories ? queries.repositories.list() : [],
     needsWorkflows ? queries.workflows.list() : [],
     needsRuns ? queries.runs.list() : [],
-    needed.has('job-performance') ? queries.jobs.list() : [],
     needed.has('failed-runs') ? queries.runs.recentFailures() : [],
-    needsSessions || needsEvents ? queries.sessions.list() : [],
     needsEvents ? queries.events.list() : [],
     needed.has('transactions') ? queries.transactions.list() : []
   ]);
   const repositoriesById = new Map(repositories.map((repository) => [repository.id, repository]));
   const workflowsById = new Map(workflows.map((workflow) => [workflow.id, workflow]));
   const runsById = new Map(runs.map((run) => [run.id, run]));
-  const sessionsById = new Map(sessions.map((session) => [session.id, session]));
-  const graders = needsGraders ? graderRows(events, sessionsById, runsById) : [];
+  const graders = needsGraders ? graderRows(events, runsById) : [];
   const sources = namedLogicalSources(logicalSources);
   const projectedWorkflows = workflowsSource(workflows, repositoriesById, sources).rows;
   const projectedRuns = runsSource(runs, workflowsById, sources).rows;
@@ -1260,13 +1160,13 @@ export async function queryCanonicalViewSources(indexedDB, logicalSources, sourc
   const outcomes = needed.has('outcomes')
     ? publishedOutcomes.length > 0
       ? /** @type {import('../../presenter.js').LogicalSourceInput} */ (sources.outcomes)
-      : outcomesSource(events, sessionsById, runsById, workflowsById, sources)
+      : outcomesSource(events, runsById, workflowsById, sources)
     : null;
   const publishedFindings = sourceRows(sources.findings);
   const findings = needed.has('findings')
     ? publishedFindings.length > 0
       ? /** @type {import('../../presenter.js').LogicalSourceInput} */ (sources.findings)
-      : findingsSource(events, sessionsById, runsById, sources)
+      : findingsSource(events, runsById, sources)
     : null;
   const publishedSecurityFindings = sourceRows(sources['security-findings']);
   const securityFindings = needed.has('security-findings') || needed.has('detection-observations')
@@ -1293,7 +1193,6 @@ export async function queryCanonicalViewSources(indexedDB, logicalSources, sourc
       metadata: canonicalProjectionMetadata(sources, 'workflows', 'workflows', projectedWorkflows.length)
     };
   }
-  if (projectedNames.has('job-performance')) projected['job-performance'] = jobsSource(jobs, runsById, sources);
   if (projectedNames.has('runs')) {
     projected.runs = {
       source: 'runs',
@@ -1302,9 +1201,8 @@ export async function queryCanonicalViewSources(indexedDB, logicalSources, sourc
     };
   }
   if (projectedNames.has('failed-runs')) projected['failed-runs'] = failedRunsSource(failedRuns, sources);
-  if (projectedNames.has('sessions')) projected.sessions = sessionsSource(sessions, runsById, sources);
-  if (projectedNames.has('events')) projected.events = eventsSource(events, sessionsById, runsById, sources);
-  if (needsMcpCalls) projected['mcp-calls'] = mcpCallsSource(events, sessionsById, runsById, sources);
+  if (projectedNames.has('events')) projected.events = eventsSource(events, runsById, sources);
+  if (needsMcpCalls) projected['mcp-calls'] = mcpCallsSource(events, runsById, sources);
   if (projectedNames.has('usage') && sourceRows(sources.usage).length === 0) {
     projected.usage = usageSource(runs, sources);
   }
@@ -1367,7 +1265,7 @@ export async function queryCanonicalViewSources(indexedDB, logicalSources, sourc
     };
   }
   if (needsFirewall) {
-    projected['firewall-observations'] = firewallObservationsSource(events, sessionsById, runsById, sources);
+    projected['firewall-observations'] = firewallObservationsSource(events, runsById, sources);
   }
   return projected;
 }

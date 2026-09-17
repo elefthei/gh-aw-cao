@@ -312,7 +312,7 @@ test("includes registered packages that have no inventory or run history", () =>
   assert.deepEqual(sources.workflows.rows, []);
 });
 
-test("transaction logs retain a session when artifacts contain no timeline", () => {
+test("transaction logs retain a run event when artifacts contain no timeline", () => {
   const rows = transactionLogRows({
     generatedAt: "2026-09-09T05:00:00Z",
     securityRuns: [{
@@ -327,8 +327,6 @@ test("transaction logs retain a session when artifacts contain no timeline", () 
     }],
   });
 
-  assert.equal(rows.sessions.length, 1);
-  assert.equal(rows.sessions[0].session, "session:gh-aw-logs:github%3Arun%3A304%3Aattempt%3A1%3Aunified");
   assert.deepEqual(rows.events.map(({ ["event-source"]: source, ["event-type"]: type }) => ({ source, type })), [{
     source: "workflow",
     type: "run_observed",
@@ -399,7 +397,6 @@ test("transaction log events preserve token-efficiency lifecycle fields", () => 
     workflow: ".github/workflows/optimization-token-optimizer.md",
     run: "306",
     "run-attempt": 1,
-    session: rows.sessions[0].session,
     event: "event:gh-aw-logs:event-token-lifecycle",
     "event-timestamp": "2026-09-09T04:02:01Z",
     "event-source": "token-intervention-lifecycle",
@@ -462,7 +459,7 @@ test("detection observations preserve verdict, warning, tooling, skipped, and un
   assert.equal(byRun.get("2")["run-link"].href, "https://github.com/githubnext/gh-aw-cao/actions/runs/2");
 });
 
-test("dashboard source bridge publishes normalized gh-aw sessions and events", () => {
+test("dashboard source bridge publishes normalized gh-aw events", () => {
   const generatedAt = "2026-09-09T05:00:00Z";
   const sources = buildDashboardLanguageSources({
     deployed: {
@@ -503,7 +500,7 @@ test("dashboard source bridge publishes normalized gh-aw sessions and events", (
         },
         timeline: [{
           sourceId: "sandbox/agent/events.jsonl:1",
-          sessionId: "githubnext/gh-aw-cao:303:1:gh-aw",
+          runId: "github:run:303:attempt:1",
           timestamp: "2026-09-09T04:00:01Z",
           source: "agent",
           type: "agent_turn",
@@ -518,25 +515,12 @@ test("dashboard source bridge publishes normalized gh-aw sessions and events", (
     githubTelemetry: [],
   });
 
-  assert.deepEqual(sources.sessions.rows[0], {
-    organization: "githubnext",
-    repository: "gh-aw-cao",
-    workflow: ".github/workflows/dashboard.md",
-    run: "303",
-    "run-attempt": 1,
-    session: "githubnext/gh-aw-cao:303:1:gh-aw",
-    "job-id": "404",
-    "session-kind": "unified-operational-log",
-    "session-status": "completed",
-    "started-at": "2026-09-09T04:00:01Z",
-    "ended-at": "2026-09-09T04:00:01Z",
-    "observed-at": "2026-09-09T04:00:00Z",
-  });
+  assert.equal("sessions" in sources, false);
   assert.equal(sources.events.rows[0]["event-type"], "agent_turn");
   assert.equal(sources.events.rows[0]["event-source"], "agent");
 });
 
-test("dashboard source bridge excludes transaction logs outside the current run and job generation", () => {
+test("dashboard source bridge excludes transaction logs outside the current run generation", () => {
   const generatedAt = "2026-09-09T05:00:00Z";
   const sources = buildDashboardLanguageSources({
     deployed: {
@@ -575,7 +559,7 @@ test("dashboard source bridge excludes transaction logs outside the current run 
           logsPayload: { status: "completed", jobs: [{ jobId: 402, name: "agent" }] },
           timeline: [{
             sourceId: "old/events.jsonl:1",
-            sessionId: "old-session",
+            runId: "github:run:302:attempt:1",
             timestamp: "2026-09-08T04:00:01Z",
             source: "agent",
             type: "agent_turn",
@@ -590,7 +574,7 @@ test("dashboard source bridge excludes transaction logs outside the current run 
           logsPayload: { status: "completed", jobs: [{ jobId: 403, name: "agent" }] },
           timeline: [{
             sourceId: "current/events.jsonl:1",
-            sessionId: "current-session",
+            runId: "github:run:303:attempt:1",
             timestamp: "2026-09-09T04:00:01Z",
             source: "agent",
             type: "agent_turn",
@@ -605,9 +589,8 @@ test("dashboard source bridge excludes transaction logs outside the current run 
     githubTelemetry: [],
   });
 
-  assert.deepEqual(sources.sessions.rows.map((row) => row.session), ["current-session"]);
-  assert.equal("job-id" in sources.sessions.rows[0], false);
-  assert.deepEqual(sources.events.rows.map((row) => row.session), ["current-session"]);
+  assert.equal("sessions" in sources, false);
+  assert.deepEqual(sources.events.rows.map((row) => row.run), ["303"]);
 });
 
 test("detection observations normalize conclusions and keep usable verdicts independent of job failures", () => {
