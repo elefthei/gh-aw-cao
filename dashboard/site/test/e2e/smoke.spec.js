@@ -3036,6 +3036,22 @@ test('DLS-PAGE-014 DLS-PAGE-015 built-in packages page renders value, inventory,
                   data: { sources: ['workflows'] },
                   mark: 'element',
                   element: 'package-route',
+                  config: { body: 'overview' }
+                }
+              ]
+            },
+            {
+              id: 'package-workflows',
+              kind: 'custom',
+              title: 'Package',
+              route: { 'hash-query-parameter': 'package' },
+              views: [
+                {
+                  id: 'package-workflow-navigation',
+                  title: 'Package workflows',
+                  data: { sources: ['workflows'] },
+                  mark: 'element',
+                  element: 'package-route',
                   config: { body: 'workflows' }
                 },
                 {
@@ -3059,18 +3075,18 @@ test('DLS-PAGE-014 DLS-PAGE-015 built-in packages page renders value, inventory,
               ]
             },
             {
-              id: 'package-dispatches',
+              id: 'package-runs',
               kind: 'custom',
               title: 'Package',
               route: { 'hash-query-parameter': 'package' },
               views: [
                 {
-                  id: 'package-dispatch-navigation',
-                  title: 'Package dispatches',
+                  id: 'package-run-navigation',
+                  title: 'Package workflow runs',
                   data: { sources: ['workflows'] },
                   mark: 'element',
                   element: 'package-route',
-                  config: { body: 'dispatches' }
+                  config: { body: 'runs' }
                 },
                 {
                   id: 'package-failure-reason-distribution',
@@ -3172,8 +3188,8 @@ test('DLS-PAGE-014 DLS-PAGE-015 built-in packages page renders value, inventory,
         packages: {
           source: 'packages',
           rows: [
-            { package: 'ambient-context', 'package-name': 'Ambient Context', 'package-icon': 'workflow', 'package-link': { 'dashboard-href': '#page-package-insights?package=ambient-context', 'dashboard-label': 'View Ambient Context package dashboard' } },
-            { package: 'aw-doctor', 'package-name': 'AW Doctor', 'package-icon': 'gear', 'package-link': { 'dashboard-href': '#page-package-insights?package=aw-doctor', 'dashboard-label': 'View AW Doctor package dashboard' } }
+            { package: 'ambient-context', 'package-name': 'Ambient Context', 'package-icon': 'workflow', 'package-link': { 'dashboard-href': '#page-package-detail?package=ambient-context', 'dashboard-label': 'View Ambient Context package dashboard' } },
+            { package: 'aw-doctor', 'package-name': 'AW Doctor', 'package-icon': 'gear', 'package-link': { 'dashboard-href': '#page-package-detail?package=aw-doctor', 'dashboard-label': 'View AW Doctor package dashboard' } }
           ],
           metadata
         },
@@ -3276,7 +3292,7 @@ test('DLS-PAGE-014 DLS-PAGE-015 built-in packages page renders value, inventory,
   await expect(awDoctorSummary).toContainText('23.9');
   await expect(awDoctorSummary.locator('[data-field="value-created"]')).toHaveText('0.25');
   await expect(awDoctorSummary.getByRole('button', { name: 'Update package' })).toHaveCount(0);
-  await expect(awDoctorSummary.getByRole('link', { name: 'View AW Doctor package dashboard' })).toHaveAttribute('href', '#page-package-insights?package=aw-doctor');
+  await expect(awDoctorSummary.getByRole('link', { name: 'View AW Doctor package dashboard' })).toHaveAttribute('href', '#page-package-detail?package=aw-doctor');
   await expect(awDoctorSummary.locator('[data-field="modes"] .mode-badge')).toHaveText('review');
   await expect(awDoctorSummary.locator('[data-field="registration"] .status')).toHaveText('true');
   await page.evaluate(() => {
@@ -3298,11 +3314,27 @@ test('DLS-PAGE-014 DLS-PAGE-015 built-in packages page renders value, inventory,
   await expect(page.locator('[data-breadcrumb-page]')).toHaveText('Ambient Context');
   await expect(page.locator('[data-page-mode]')).toHaveText('Review');
   await expect(page.locator('[data-nav-page-id="packages"]')).toHaveAttribute('aria-current', 'page');
-  await expect(page.getByRole('navigation', { name: 'Ambient Context views' })).toContainText('InsightsWorkflowsDispatchesReports');
+  const packageNavigation = page.getByRole('navigation', { name: 'Ambient Context views' });
+  await expect(packageNavigation).toContainText('OverviewWorkflowsRuns');
+  await expect(packageNavigation).toHaveCSS('display', 'flex');
+  await expect(packageNavigation).toHaveCSS('border-bottom-style', 'solid');
+  const currentPackageLink = packageNavigation.getByRole('link', { name: 'Overview' });
+  await expect(currentPackageLink).toHaveAttribute('aria-current', 'page');
+  expect(await currentPackageLink.evaluate((link) => {
+    const token = document.createElement('span');
+    token.style.color = 'var(--accent)';
+    link.append(token);
+    const colors = [getComputedStyle(link, '::after').backgroundColor, getComputedStyle(token).color];
+    token.remove();
+    return colors[0] === colors[1];
+  })).toBe(true);
+  await expect(page.getByRole('heading', { name: 'Orchestrator and workers', level: 3 })).toHaveCount(0);
+  await packageNavigation.getByRole('link', { name: 'Workflows' }).click();
   await expect(page.getByRole('heading', { name: 'Orchestrator and workers', level: 3 })).toBeVisible();
-  const packageWorkflowRows = page.locator('[data-page-id="package-detail"] .custom-table tbody tr');
+  await expect(packageNavigation.getByRole('link', { name: 'Workflows' })).toHaveAttribute('aria-current', 'page');
+  const packageWorkflowRows = page.locator('[data-page-id="package-workflows"] .custom-table tbody tr');
   await expect(packageWorkflowRows).toHaveCount(2);
-  await expect(page.locator('[data-page-id="package-detail"] .custom-table thead tr').first().locator('th')).toHaveText([
+  await expect(page.locator('[data-page-id="package-workflows"] .custom-table thead tr').first().locator('th')).toHaveText([
     'Role',
     'Workflow',
     'Definition',
@@ -3315,6 +3347,23 @@ test('DLS-PAGE-014 DLS-PAGE-015 built-in packages page renders value, inventory,
   await expect(packageWorkflowRows.first().locator('td').nth(5)).toHaveText('0');
   await expect(packageWorkflowRows.first().locator('td').nth(6)).toHaveText('0');
   await expect(packageWorkflowRows.nth(1)).toContainText('WorkerAmbient Context Worker');
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(packageNavigation).toHaveCSS('display', 'grid');
+  await expect(packageNavigation).toHaveCSS('gap', '0px');
+  await expect(packageNavigation).toHaveCSS('overflow', 'hidden');
+  const mobilePackageLinks = packageNavigation.locator('a');
+  await expect(mobilePackageLinks).toHaveCount(3);
+  await expect(mobilePackageLinks.first().locator('.tab-trailing-icon')).toBeVisible();
+  expect(await mobilePackageLinks.first().locator('.tab-trailing-icon').evaluate((icon) => parseFloat(getComputedStyle(icon).marginLeft) > 0)).toBe(true);
+  await mobilePackageLinks.first().focus();
+  await expect(mobilePackageLinks.first()).toHaveCSS('outline-offset', '-3px');
+  const mobileLinkBoxes = await mobilePackageLinks.evaluateAll((links) => links.map((link) => {
+    const box = link.getBoundingClientRect();
+    return { height: box.height, top: box.top };
+  }));
+  expect(mobileLinkBoxes.every((box) => box.height >= 44)).toBe(true);
+  expect(mobileLinkBoxes.every((box, index) => index === 0 || box.top > mobileLinkBoxes[index - 1].top)).toBe(true);
 
 });
 

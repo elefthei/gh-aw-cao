@@ -65,8 +65,8 @@ const ELEMENT_RENDERERS = new Map([
   ['package-summary-table', ({ sources }) => renderPackageSummary(sources)],
   ['package-activity-shell', renderPackageActivityShellElement],
   ['package-insights', (context) => renderPackageRouteVariant(context, 'insights')],
-  ['package-detail', (context) => renderPackageRouteVariant(context, 'workflows')],
-  ['package-dispatches', (context) => renderPackageRouteVariant(context, 'dispatches')],
+  ['package-detail', (context) => renderPackageRouteVariant(context, 'overview')],
+  ['package-dispatches', (context) => renderPackageRouteVariant(context, 'runs')],
   ['package-reports', (context) => renderPackageRouteVariant(context, 'reports')],
   ['package-route', renderPackageRouteView],
   ['workflow-route', renderWorkflowRouteView],
@@ -147,11 +147,11 @@ const LAZY_ELEMENT_RENDERERS = new Map([
   )],
   ['package-detail-lazy', lazyElementRenderer(
     () => import('./package-route-view.js'),
-    ({ renderPackageRouteVariant }, context) => renderPackageRouteVariant(context, 'workflows')
+    ({ renderPackageRouteVariant }, context) => renderPackageRouteVariant(context, 'overview')
   )],
   ['package-dispatches-lazy', lazyElementRenderer(
     () => import('./package-route-view.js'),
-    ({ renderPackageRouteVariant }, context) => renderPackageRouteVariant(context, 'dispatches')
+    ({ renderPackageRouteVariant }, context) => renderPackageRouteVariant(context, 'runs')
   )],
   ['package-reports-lazy', lazyElementRenderer(
     () => import('./package-route-view.js'),
@@ -412,7 +412,7 @@ function renderPackageStatusGridElement(context) {
             'a',
             {
               className: `package-status-activity${noOutputWarning ? ' package-status-activity-warning' : ''}`,
-              href: `#page-package-dispatches?package=${encodeURIComponent(stringValue(row.package))}`,
+              href: `#page-package-runs?package=${encodeURIComponent(stringValue(row.package))}`,
               title: stringValue(row['activity-window']),
               'aria-label': `Recent activity: ${dispatchStatus.detail}; ${dispatchText}; ${outputText}${noOutputWarning ? '; warning: dispatches produced no output' : ''}`
             },
