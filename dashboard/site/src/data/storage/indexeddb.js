@@ -6,7 +6,7 @@ import { tidy } from '../../data-operations.js';
 const debug = createDebug('data:indexeddb');
 
 export const DATABASE_NAME = 'gh-aw-cao-dashboard-data';
-export const DATABASE_VERSION = 16;
+export const DATABASE_VERSION = 17;
 
 /** @param {string} [pathname] */
 export function canonicalDatabaseName(pathname) {
@@ -32,44 +32,32 @@ export const CANONICAL_DATABASE_SCHEMA = /** @type {Record<
    indexes: { bySlug: 'slug' }
  },
  repositories: {
-    keyPath: 'id',
-    indexes: { byGithubId: 'githubId', byFullName: 'fullName' }
-  },
-  workflows: {
-    keyPath: 'id',
-    indexes: { byRepository: 'repositoryId', byRepositoryPath: ['repositoryId', 'path'] }
-  },
-  runs: {
-    keyPath: 'id',
-    indexes: {
-      byRepository: 'repositoryId',
-      byWorkflow: 'workflowId',
-      byStatus: 'status',
-      byConclusion: 'conclusion',
-      byRepositoryStartedAt: ['repositoryId', 'startedAt'],
-      byWorkflowStartedAt: ['workflowId', 'startedAt']
-    }
-  },
-  domains: {
-    keyPath: 'id',
-    indexes: {
-      byRun: 'runId',
-      byDomain: 'domain'
-    }
-  },
-  tools: {
-    keyPath: 'id',
-    indexes: {
-      byRun: 'runId',
-      byType: 'toolType'
-    }
-  },
-  audits: {
-    keyPath: 'id',
-    indexes: {
-      byRun: 'runId',
-      byType: 'type'
-    }
+   keyPath: 'id',
+   indexes: {}
+ },
+ workflows: {
+   keyPath: 'id',
+   indexes: { byRepository: 'repositoryId' }
+ },
+ runs: {
+   keyPath: 'id',
+   indexes: {
+     byRepository: 'repositoryId',
+     byWorkflow: 'workflowId',
+     byConclusion: 'conclusion'
+   }
+ },
+ domains: {
+   keyPath: 'id',
+   indexes: { byRun: 'runId' }
+ },
+ tools: {
+   keyPath: 'id',
+   indexes: { byRun: 'runId' }
+ },
+ audits: {
+   keyPath: 'id',
+   indexes: { byRun: 'runId' }
   },
   issues: {
     keyPath: 'id',
@@ -79,7 +67,7 @@ export const CANONICAL_DATABASE_SCHEMA = /** @type {Record<
   },
   transactions: {
     keyPath: 'id',
-    indexes: { byCreatedAt: 'createdAt', byKind: 'kind' }
+    indexes: { byCreatedAt: 'createdAt' }
   }
 });
 const DEFAULT_WRITE_BATCH_SIZE = 1000;
@@ -92,18 +80,12 @@ const INGESTION_LOCK_WAITING_NOTICE_DELAY_MS = 500;
 const MAX_QUERY_INDEX_LOOKUPS = 32;
 const QUERYABLE_STRING_KEY_PATHS = new Set([
   'slug',
-  'fullName',
   'repositoryId',
   'workflowId',
   'runId',
-  'status',
-  'conclusion',
-  'type',
-  'source',
-  'correlationId',
-  'domain',
-  'toolType'
+  'conclusion'
 ]);
+const monotonicNow = () => globalThis.performance?.now() ?? Date.now();
 
 /**
  * @template T
@@ -124,6 +106,34 @@ function transactionDone(transaction) {
     transaction.onerror = () => reject(transaction.error ?? new Error('IndexedDB transaction failed'));
     transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB transaction aborted'));
   });
+}
+
+/**
+ * Uses relaxed durability for the reconstructable cache where supported.
+ * Safari versions that reject the options argument retain the default path.
+ * @param {IDBDatabase} database
+ * @param {string | string[]} storeNames
+ */
+function readwriteTransaction(database, storeNames) {
+  try {
+    return database.transaction(storeNames, 'readwrite', { durability: 'relaxed' });
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    debug('relaxed transaction durability unsupported; using default durability', {
+      storeCount: Array.isArray(storeNames) ? storeNames.length : 1
+    });
+    return database.transaction(storeNames, 'readwrite');
+  }
+}
+
+/** @param {IDBTransaction} transaction */
+function commitTransaction(transaction) {
+  if (typeof transaction.commit === 'function') {
+    debug('explicitly committing queued IndexedDB requests');
+    transaction.commit();
+  } else {
+    debug('explicit IndexedDB commit unsupported; using automatic commit');
+  }
 }
 
 /**
@@ -225,7 +235,21 @@ export function openCanonicalDatabase(indexedDB) {
         createSchema(database);
       }
     };
-    request.onsuccess = () => resolve(request.result);
+    let blocked = false;
+    request.onsuccess = () => {
+      const database = request.result;
+      if (blocked) {
+        debug('closing database opened after blocked request settled', name);
+        database.close();
+        return;
+      }
+      database.onversionchange = () => {
+        debug('closing database for version change', name);
+        database.close();
+      };
+      database.onclose = () => debug('database connection closed', name);
+      resolve(database);
+    };
     request.onerror = () => {
       const error = request.error ?? new Error('Unable to open canonical dashboard data');
       debug('failed to open database', name, error);
@@ -233,6 +257,7 @@ export function openCanonicalDatabase(indexedDB) {
     };
     request.onblocked = () => {
       debug('open database blocked by an older connection', name);
+      blocked = true;
       reject(new Error('Opening canonical dashboard data was blocked'));
     };
   });
@@ -264,11 +289,14 @@ export async function upsertCanonicalBatch(indexedDB, batch, options = {}) {
       const records = batch[storeName];
       for (let offset = 0; offset < records.length; offset += batchSize) {
         const boundedRecords = records.slice(offset, offset + batchSize);
-        const transaction = database.transaction(storeName, 'readwrite');
+        const transaction = readwriteTransaction(database, storeName);
+        const done = transactionDone(transaction);
+        const store = transaction.objectStore(storeName);
         for (const record of boundedRecords) {
-          transaction.objectStore(storeName).put(record);
+          store.put(record);
         }
-        await transactionDone(transaction);
+        commitTransaction(transaction);
+        await done;
         committedRecords += boundedRecords.length;
         committedBatches += 1;
         await options.onBatchCommitted?.({ committedBatches, committedRecords });
@@ -285,15 +313,33 @@ export async function upsertCanonicalBatch(indexedDB, batch, options = {}) {
  * @returns {Promise<import('../model/schema.js').CanonicalBatch>}
  */
 export async function readCanonicalBatch(indexedDB) {
+  return /** @type {import('../model/schema.js').CanonicalBatch} */ (
+    await readCollections(indexedDB, ENTITY_STORES)
+  );
+}
+
+/**
+ * Reads multiple stores through one connection and one readonly transaction.
+ * @param {IDBFactory} indexedDB
+ * @param {readonly typeof ENTITY_STORES[number][]} storeNames
+ */
+export async function readCollections(indexedDB, storeNames) {
+  if (storeNames.length === 0) return {};
+  const startedAt = monotonicNow();
   const database = await openCanonicalDatabase(indexedDB);
   try {
-    const transaction = database.transaction(ENTITY_STORES);
-    const records = await Promise.all(ENTITY_STORES.map((storeName) =>
+    const transaction = database.transaction([...storeNames]);
+    const done = transactionDone(transaction);
+    const records = await Promise.all(storeNames.map((storeName) =>
       requestResult(transaction.objectStore(storeName).getAll())
     ));
-    return /** @type {import('../model/schema.js').CanonicalBatch} */ (Object.fromEntries(
-      ENTITY_STORES.map((storeName, index) => [storeName, records[index]])
-    ));
+    await done;
+    debug('completed multi-store collection read', {
+      storeCount: storeNames.length,
+      requestCount: storeNames.length,
+      durationMs: monotonicNow() - startedAt
+    });
+    return Object.fromEntries(storeNames.map((storeName, index) => [storeName, records[index]]));
   } finally {
     database.close();
   }
@@ -320,8 +366,10 @@ export async function readCollection(indexedDB, storeName) {
  * @param {IDBFactory} indexedDB
  * @param {typeof ENTITY_STORES[number]} storeName
  * @param {import('../../data-operations.js').DataOperator[]} operators
+ * @param {{ onMetrics?: (metrics: { durationMs: number, requestCount: number, recordsScanned: number, recordsReturned: number, index: string | null }) => void }} [options]
  */
-export async function queryCollection(indexedDB, storeName, operators) {
+export async function queryCollection(indexedDB, storeName, operators, options = {}) {
+  const startedAt = monotonicNow();
   const database = await openCanonicalDatabase(indexedDB);
   try {
     const transaction = database.transaction(storeName);
@@ -342,7 +390,17 @@ export async function queryCollection(indexedDB, storeName, operators) {
         candidateRecords: records.length
       });
     }
-    return tidy(records, operators);
+    const result = tidy(records, operators);
+    const metrics = {
+      durationMs: monotonicNow() - startedAt,
+      requestCount: plan?.keys.length ?? 1,
+      recordsScanned: records.length,
+      recordsReturned: result.length,
+      index: plan?.index.name ?? null
+    };
+    debug('completed collection query', { store: storeName, ...metrics });
+    options.onMetrics?.(metrics);
+    return result;
   } finally {
     database.close();
   }
@@ -428,7 +486,7 @@ export async function readIndex(indexedDB, storeName, indexName, key) {
  *
  * @param {IDBFactory} indexedDB
  * @param {import('../model/schema.js').CanonicalBatch} batch
- * @param {{ batchSize?: number, onProgress?: (progress: { storedRecords: number, totalRecords: number }) => void, previousBatch?: import('../model/schema.js').CanonicalBatch, signal?: AbortSignal }} [options]
+ * @param {{ batchSize?: number, onProgress?: (progress: { storedRecords: number, totalRecords: number }) => void, onMetrics?: (metrics: { durationMs: number, requestCount: number, storedRecords: number, deletedRecords: number, scannedKeys: number, committedBatches: number, abortedTransactions: number }) => void, previousBatch?: import('../model/schema.js').CanonicalBatch, signal?: AbortSignal }} [options]
  */
 export async function replaceCanonicalBatch(indexedDB, batch, options = {}) {
   options.signal?.throwIfAborted();
@@ -447,11 +505,35 @@ export async function replaceCanonicalBatch(indexedDB, batch, options = {}) {
         && (!retained || JSON.stringify(retained) !== JSON.stringify(record));
     })];
   }));
+  const previousBatch = options.previousBatch;
+  const recordsToDelete = previousBatch
+    ? Object.fromEntries(ENTITY_STORES.map((storeName) => {
+        const retained = new Set(batch[storeName].map((record) => String(record.id)));
+        return [storeName, previousBatch[storeName]
+          .map((record) => record.id)
+          .filter((id) => !retained.has(String(id)))];
+      }))
+    : null;
   const totalRecords = ENTITY_STORES.reduce(
     (total, storeName) => total + recordsToWrite[storeName].length,
     0
   );
   let storedRecords = 0;
+  let deletedRecords = 0;
+  let scannedKeys = 0;
+  let requestCount = 0;
+  let committedBatches = 0;
+  let abortedTransactions = 0;
+  const startedAt = monotonicNow();
+  const currentMetrics = () => ({
+    durationMs: monotonicNow() - startedAt,
+    requestCount,
+    storedRecords,
+    deletedRecords,
+    scannedKeys,
+    committedBatches,
+    abortedTransactions
+  });
   debug('starting canonical batch replacement', { totalRecords, batchSize });
   const database = await openCanonicalDatabase(indexedDB);
   try {
@@ -459,23 +541,93 @@ export async function replaceCanonicalBatch(indexedDB, batch, options = {}) {
       const records = batch[storeName];
       const retained = new Set(records.map((record) => String(record.id)));
       // Evict first so reclaimed space is available to the writes that follow.
-      const removal = database.transaction(storeName, 'readwrite');
+      const removal = readwriteTransaction(database, storeName);
+      const removalDone = transactionDone(removal);
       const removalStore = removal.objectStore(storeName);
-      const existing = await requestResult(removalStore.getAllKeys());
-      for (const id of existing) if (!retained.has(String(id))) removalStore.delete(id);
-      await transactionDone(removal);
+      const knownDeleted = recordsToDelete?.[storeName];
+      const reconciliationStrategy = knownDeleted
+        ? 'retained-snapshot'
+        : typeof removalStore.openKeyCursor === 'function'
+          ? 'key-cursor'
+          : 'all-keys-fallback';
+      try {
+        if (knownDeleted) {
+          for (const id of knownDeleted) removalStore.delete(/** @type {IDBValidKey} */ (id));
+          deletedRecords += knownDeleted.length;
+          requestCount += knownDeleted.length;
+          commitTransaction(removal);
+        } else if (typeof removalStore.openKeyCursor !== 'function') {
+          requestCount += 1;
+          const existing = await requestResult(removalStore.getAllKeys());
+          scannedKeys += existing.length;
+          for (const id of existing) {
+            if (retained.has(String(id))) continue;
+            removalStore.delete(id);
+            deletedRecords += 1;
+            requestCount += 1;
+          }
+        } else {
+          await new Promise((resolve, reject) => {
+            requestCount += 1;
+            const cursorRequest = removalStore.openKeyCursor();
+            cursorRequest.onerror = () => reject(cursorRequest.error ?? new Error('IndexedDB key cursor failed'));
+            cursorRequest.onsuccess = () => {
+              const cursor = cursorRequest.result;
+              if (!cursor) {
+                resolve(undefined);
+                return;
+              }
+              scannedKeys += 1;
+              if (!retained.has(String(cursor.primaryKey))) {
+                removalStore.delete(cursor.primaryKey);
+                deletedRecords += 1;
+                requestCount += 1;
+              }
+              cursor.continue();
+            };
+          });
+        }
+        await removalDone;
+        committedBatches += 1;
+      } catch (error) {
+        abortedTransactions += 1;
+        try {
+          removal.abort();
+        } catch {
+          // The transaction already aborted or completed.
+        }
+        await removalDone.catch(() => undefined);
+        throw error;
+      }
       debug('completed canonical store eviction', {
         store: storeName,
         retainedRecords: retained.size,
-        existingRecords: existing.length
+        deletedRecords: knownDeleted?.length ?? deletedRecords,
+        scannedKeys: knownDeleted ? 0 : scannedKeys,
+        reconciliationStrategy
       });
       const changedRecords = recordsToWrite[storeName];
       for (let offset = 0; offset < changedRecords.length; offset += batchSize) {
         const boundedRecords = changedRecords.slice(offset, offset + batchSize);
-        const transaction = database.transaction(storeName, 'readwrite');
+        const transaction = readwriteTransaction(database, storeName);
+        const done = transactionDone(transaction);
         const store = transaction.objectStore(storeName);
-        for (const record of boundedRecords) store.put(record);
-        await transactionDone(transaction);
+        try {
+          for (const record of boundedRecords) store.put(record);
+          requestCount += boundedRecords.length;
+          commitTransaction(transaction);
+          await done;
+          committedBatches += 1;
+        } catch (error) {
+          abortedTransactions += 1;
+          try {
+            transaction.abort();
+          } catch {
+            // The transaction already aborted or completed.
+          }
+          await done.catch(() => undefined);
+          throw error;
+        }
         storedRecords += boundedRecords.length;
         debug('committed canonical write chunk', {
           store: storeName,
@@ -488,10 +640,17 @@ export async function replaceCanonicalBatch(indexedDB, batch, options = {}) {
     }
     // Empty batches still report a terminal progress update.
     if (totalRecords === 0) options.onProgress?.({ storedRecords, totalRecords });
+  } catch (error) {
+    const metrics = currentMetrics();
+    debug('canonical batch replacement failed', metrics);
+    options.onMetrics?.(metrics);
+    throw error;
   } finally {
     database.close();
   }
-  debug('completed canonical batch replacement', { storedRecords, totalRecords });
+  const metrics = currentMetrics();
+  debug('completed canonical batch replacement', metrics);
+  options.onMetrics?.(metrics);
 }
 
 /**
@@ -501,16 +660,34 @@ export async function replaceCanonicalBatch(indexedDB, batch, options = {}) {
 export async function recordTransaction(indexedDB, transaction) {
   const database = await openCanonicalDatabase(indexedDB);
   try {
-    const write = database.transaction(TRANSACTION_STORE, 'readwrite');
+    const write = readwriteTransaction(database, TRANSACTION_STORE);
+    const done = transactionDone(write);
     const store = write.objectStore(TRANSACTION_STORE);
     store.put(transaction);
-    const records = await requestResult(store.index('byCreatedAt').getAll());
-    for (const expired of records
-      .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)))
-      .slice(0, Math.max(0, records.length - MAX_TRANSACTION_RECORDS))) {
-      store.delete(expired.id);
+    if (typeof store.count !== 'function' || typeof store.index('byCreatedAt').openCursor !== 'function') {
+      const records = await requestResult(store.index('byCreatedAt').getAll());
+      for (const expired of records.slice(0, Math.max(0, records.length - MAX_TRANSACTION_RECORDS))) {
+        store.delete(expired.id);
+      }
+    } else {
+      const count = await requestResult(store.count());
+      let remaining = Math.max(0, count - MAX_TRANSACTION_RECORDS);
+      await new Promise((resolve, reject) => {
+        const cursorRequest = store.index('byCreatedAt').openCursor();
+        cursorRequest.onerror = () => reject(cursorRequest.error ?? new Error('IndexedDB transaction cursor failed'));
+        cursorRequest.onsuccess = () => {
+          const cursor = cursorRequest.result;
+          if (!cursor || remaining === 0) {
+            resolve(undefined);
+            return;
+          }
+          cursor.delete();
+          remaining -= 1;
+          cursor.continue();
+        };
+      });
     }
-    await transactionDone(write);
+    await done;
     debug('recorded ingestion transaction', {
       kind: transaction.kind,
       committedRecords: transaction.committedRecords ?? null

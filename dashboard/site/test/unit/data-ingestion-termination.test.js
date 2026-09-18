@@ -1,6 +1,9 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const debug = vi.hoisted(() => vi.fn());
+vi.mock('../../src/debug.js', () => ({ createDebug: () => debug }));
+
 const actualStorage = /** @type {typeof import('../../src/data/storage/indexeddb.js')} */ (
   await vi.importActual('../../src/data/storage/indexeddb.js')
 );
@@ -59,6 +62,7 @@ function quotaExceededError() {
 }
 
 beforeEach(async () => {
+  debug.mockClear();
   replaceCanonicalBatch.mockClear();
   replaceCanonicalBatch.mockImplementation(
     /** @type {(...parameters: unknown[]) => Promise<void>} */ (actualStorage.replaceCanonicalBatch)
@@ -105,6 +109,32 @@ describe('canonical ingestion termination', () => {
     expect(replaceCanonicalBatch.mock.calls.length).toBeLessThanOrEqual(5);
   });
 
+  it('refreshes reconciliation state after a quota failure with partial writes', async () => {
+    let attempt = 0;
+    replaceCanonicalBatch.mockImplementation(async (...parameters) => {
+      const [factory, incoming, options] = /** @type {Parameters<typeof actualStorage.replaceCanonicalBatch>} */ (
+        parameters
+      );
+      attempt += 1;
+      if (attempt === 1) {
+        const partial = structuredClone(incoming);
+        partial.runs = partial.runs.slice(0, 1);
+        await actualStorage.replaceCanonicalBatch(factory, partial, options);
+        throw quotaExceededError();
+      }
+      expect(options?.previousBatch?.runs).toHaveLength(1);
+      return actualStorage.replaceCanonicalBatch(factory, incoming, options);
+    });
+
+    await expect(ingestDashboardSources(indexedDB, sourcesWithRuns(64)))
+      .resolves.toMatchObject({ updated: true });
+    expect(attempt).toBe(2);
+    expect(debug).toHaveBeenCalledWith(
+      'retrying canonical write after quota pressure',
+      expect.objectContaining({ attempt: 1, retainedRecords: 3 })
+    );
+  });
+
   it('stops rewriting when reported database usage never drops below the cap', async () => {
     const storage = /** @type {StorageManager} */ (/** @type {unknown} */ ({
       estimate: vi.fn().mockResolvedValue({
@@ -120,5 +150,13 @@ describe('canonical ingestion termination', () => {
       maxDatabaseBytes: 1_000_000
     })).resolves.toMatchObject({ updated: true });
     expect(replaceCanonicalBatch.mock.calls.length).toBeLessThanOrEqual(5);
+    expect(debug).toHaveBeenCalledWith(
+      'shrinking canonical batch after storage usage check',
+      expect.objectContaining({
+        attempt: 1,
+        databaseUsage: 4_000_000_000,
+        maxDatabaseBytes: 1_000_000
+      })
+    );
   });
 });

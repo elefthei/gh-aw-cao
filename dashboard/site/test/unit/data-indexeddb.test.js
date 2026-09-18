@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   canonicalDatabaseName,
   DATABASE_NAME,
@@ -7,7 +7,10 @@ import {
   openCanonicalDatabase,
   queryCollection,
   readCollection,
+  readCollections,
   readRecord,
+  readTransactions,
+  recordTransaction,
   replaceCanonicalBatch,
   upsertCanonicalBatch,
   withCanonicalIngestionLock
@@ -71,6 +74,12 @@ beforeEach(async () => {
   });
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.resetModules();
+});
+
 describe('canonical IndexedDB', () => {
   it('initializes the simplified database schema', async () => {
     const database = await openCanonicalDatabase(indexedDB);
@@ -87,11 +96,15 @@ describe('canonical IndexedDB', () => {
       'workflows'
     ]);
     expect(database.transaction('repositories').objectStore('repositories').keyPath).toBe('id');
-    expect(database.transaction('runs').objectStore('runs').indexNames).toContain('byConclusion');
-    expect([...database.transaction('domains').objectStore('domains').indexNames]).toEqual(['byDomain', 'byRun']);
-    expect([...database.transaction('tools').objectStore('tools').indexNames]).toEqual(['byRun', 'byType']);
-    expect([...database.transaction('audits').objectStore('audits').indexNames]).toEqual(['byRun', 'byType']);
+    expect([...database.transaction('repositories').objectStore('repositories').indexNames]).toEqual([]);
+    expect([...database.transaction('workflows').objectStore('workflows').indexNames]).toEqual(['byRepository']);
+    expect([...database.transaction('runs').objectStore('runs').indexNames])
+      .toEqual(['byConclusion', 'byRepository', 'byWorkflow']);
+    expect([...database.transaction('domains').objectStore('domains').indexNames]).toEqual(['byRun']);
+    expect([...database.transaction('tools').objectStore('tools').indexNames]).toEqual(['byRun']);
+    expect([...database.transaction('audits').objectStore('audits').indexNames]).toEqual(['byRun']);
     expect([...database.transaction('issues').objectStore('issues').indexNames]).toEqual(['byRun']);
+    expect([...database.transaction('transactions').objectStore('transactions').indexNames]).toEqual(['byCreatedAt']);
     database.close();
   });
 
@@ -146,6 +159,101 @@ describe('canonical IndexedDB', () => {
     expect(await readCollection(indexedDB, 'repositories')).toHaveLength(1);
   });
 
+  it('reads selected stores through one readonly transaction', async () => {
+    const canonicalBatch = normalize([]);
+    canonicalBatch.repositories = [{ id: 'repository:1' }];
+    canonicalBatch.packages = [{ id: 'package:1' }];
+    await upsertCanonicalBatch(indexedDB, canonicalBatch);
+    const transactions = vi.spyOn(IDBDatabase.prototype, 'transaction');
+
+    const collections = await readCollections(indexedDB, ['repositories', 'packages']);
+
+    expect(collections).toEqual({
+      repositories: canonicalBatch.repositories,
+      packages: canonicalBatch.packages
+    });
+    expect(transactions).toHaveBeenCalledTimes(1);
+    expect(transactions).toHaveBeenCalledWith(['repositories', 'packages']);
+    transactions.mockRestore();
+  });
+
+  it('requests relaxed durability and explicitly commits bounded writes', async () => {
+    const transactions = vi.spyOn(IDBDatabase.prototype, 'transaction');
+    const commits = vi.spyOn(IDBTransaction.prototype, 'commit');
+
+    await upsertCanonicalBatch(indexedDB, batch());
+
+    expect(transactions).toHaveBeenCalledWith(
+      'repositories',
+      'readwrite',
+      { durability: 'relaxed' }
+    );
+    expect(commits).toHaveBeenCalledOnce();
+    transactions.mockRestore();
+    commits.mockRestore();
+  });
+
+  it('falls back when transaction durability options are unsupported', async () => {
+    const originalTransaction = IDBDatabase.prototype.transaction;
+    /** @type {number[]} */
+    const argumentCounts = [];
+    IDBDatabase.prototype.transaction = /** @type {typeof IDBDatabase.prototype.transaction} */ (
+      function transactionWithoutOptions(...args) {
+        argumentCounts.push(args.length);
+        if (args.length === 3) throw new TypeError('transaction options are unsupported');
+        return originalTransaction.apply(this, args);
+      }
+    );
+
+    try {
+      await upsertCanonicalBatch(indexedDB, batch());
+    } finally {
+      IDBDatabase.prototype.transaction = originalTransaction;
+    }
+
+    expect(argumentCounts.slice(-2)).toEqual([3, 2]);
+    expect(await readCollection(indexedDB, 'repositories')).toHaveLength(1);
+  });
+
+  it('logs transaction compatibility and reconciliation access paths', async () => {
+    const debug = vi.fn();
+    vi.resetModules();
+    vi.doMock('../../src/debug.js', () => ({ createDebug: () => debug }));
+    const originalTransaction = IDBDatabase.prototype.transaction;
+    IDBDatabase.prototype.transaction = /** @type {typeof IDBDatabase.prototype.transaction} */ (
+      function transactionWithoutOptions(...args) {
+        if (args.length === 3) throw new TypeError('transaction options are unsupported');
+        return originalTransaction.apply(this, args);
+      }
+    );
+    const storage = await import('../../src/data/storage/indexeddb.js');
+    const canonicalBatch = batch();
+
+    try {
+      await storage.replaceCanonicalBatch(indexedDB, canonicalBatch, {
+        previousBatch: normalize([])
+      });
+      await storage.readCollections(indexedDB, ['repositories', 'packages']);
+    } finally {
+      IDBDatabase.prototype.transaction = originalTransaction;
+      vi.doUnmock('../../src/debug.js');
+    }
+
+    expect(debug).toHaveBeenCalledWith(
+      'relaxed transaction durability unsupported; using default durability',
+      { storeCount: 1 }
+    );
+    expect(debug).toHaveBeenCalledWith('explicitly committing queued IndexedDB requests');
+    expect(debug).toHaveBeenCalledWith(
+      'completed canonical store eviction',
+      expect.objectContaining({ reconciliationStrategy: 'retained-snapshot' })
+    );
+    expect(debug).toHaveBeenCalledWith(
+      'completed multi-store collection read',
+      expect.objectContaining({ storeCount: 2, requestCount: 2 })
+    );
+  });
+
   it('compiles indexed predicates while preserving JavaScript query semantics', async () => {
     const records = [
       { id: 'run:3', conclusion: 'failure', startedAt: '2026-09-03T00:00:00Z' },
@@ -170,6 +278,30 @@ describe('canonical IndexedDB', () => {
     expect(result).toEqual(tidy(stored, operators));
     expect(indexedReads).toHaveBeenCalledTimes(2);
     indexedReads.mockRestore();
+  });
+
+  it('reports query access-plan measurements', async () => {
+    await writeRecords('runs', [
+      { id: 'run:1', conclusion: 'failure' },
+      { id: 'run:2', conclusion: 'success' },
+      { id: 'run:3', conclusion: 'failure' }
+    ]);
+    const metrics = vi.fn();
+
+    const result = await queryCollection(indexedDB, 'runs', [{
+      op: 'filter',
+      predicates: [{ field: 'conclusion', equals: 'failure' }]
+    }], { onMetrics: metrics });
+
+    expect(result).toHaveLength(2);
+    expect(metrics).toHaveBeenCalledWith({
+      durationMs: expect.any(Number),
+      requestCount: 1,
+      recordsScanned: 2,
+      recordsReturned: 2,
+      index: 'byConclusion'
+    });
+    expect(metrics).toHaveBeenCalledTimes(1);
   });
 
   it('uses run indexes without changing filtered collection order', async () => {
@@ -239,6 +371,33 @@ describe('canonical IndexedDB', () => {
     indexedReads.mockRestore();
   });
 
+  it('bounds index lookups without changing query results', async () => {
+    const records = Array.from({ length: 40 }, (_, index) => ({
+      id: `run:${String(index).padStart(2, '0')}`,
+      conclusion: `conclusion:${String(index).padStart(2, '0')}`
+    }));
+    await writeRecords('runs', records);
+    const indexedReads = vi.spyOn(IDBIndex.prototype, 'getAll');
+    const storeReads = vi.spyOn(IDBObjectStore.prototype, 'getAll');
+    const indexedOperators = /** @type {import('../../src/data-operations.js').DataOperator[]} */ ([{
+      op: 'filter',
+      predicates: [{ field: 'conclusion', in: records.slice(0, 32).map(({ conclusion }) => conclusion) }]
+    }]);
+    const scanOperators = /** @type {import('../../src/data-operations.js').DataOperator[]} */ ([{
+      op: 'filter',
+      predicates: [{ field: 'conclusion', in: records.slice(0, 33).map(({ conclusion }) => conclusion) }]
+    }]);
+
+    expect(await queryCollection(indexedDB, 'runs', indexedOperators))
+      .toEqual(tidy(records, indexedOperators));
+    expect(indexedReads).toHaveBeenCalledTimes(32);
+    expect(await queryCollection(indexedDB, 'runs', scanOperators))
+      .toEqual(tidy(records, scanOperators));
+    expect(storeReads).toHaveBeenCalledTimes(1);
+    indexedReads.mockRestore();
+    storeReads.mockRestore();
+  });
+
   it('writes 100,000 records in bounded transactions', async () => {
     const canonicalBatch = normalize([]);
     canonicalBatch.repositories = Array.from({ length: 100_000 }, (_, index) => ({
@@ -299,6 +458,123 @@ describe('canonical IndexedDB', () => {
     expect(await readCollection(indexedDB, 'repositories')).toEqual(canonicalBatch.repositories);
   });
 
+  it('uses the supplied snapshot for bounded reconciliation without scanning database keys', async () => {
+    const canonicalBatch = batch();
+    await upsertCanonicalBatch(indexedDB, canonicalBatch);
+    const keyScans = vi.spyOn(IDBObjectStore.prototype, 'getAllKeys');
+    const metrics = vi.fn();
+
+    await replaceCanonicalBatch(indexedDB, normalize([]), {
+      previousBatch: canonicalBatch,
+      onMetrics: metrics
+    });
+
+    expect(keyScans).not.toHaveBeenCalled();
+    expect(metrics).toHaveBeenCalledWith(expect.objectContaining({
+      deletedRecords: 1,
+      scannedKeys: 0
+    }));
+    keyScans.mockRestore();
+  });
+
+  it('uses key-only cursors when reconciliation has no previous snapshot', async () => {
+    const canonicalBatch = batch();
+    await upsertCanonicalBatch(indexedDB, canonicalBatch);
+    const keyScans = vi.spyOn(IDBObjectStore.prototype, 'getAllKeys');
+    const cursors = vi.spyOn(IDBObjectStore.prototype, 'openKeyCursor');
+
+    await replaceCanonicalBatch(indexedDB, normalize([]));
+
+    expect(keyScans).not.toHaveBeenCalled();
+    expect(cursors).toHaveBeenCalled();
+    keyScans.mockRestore();
+    cursors.mockRestore();
+  });
+
+  it('falls back to materialized keys when key-only cursors are unavailable', async () => {
+    const canonicalBatch = batch();
+    canonicalBatch.repositories.push({ id: 'repository:2', fullName: 'githubnext/other' });
+    await upsertCanonicalBatch(indexedDB, canonicalBatch);
+    const originalOpenKeyCursor = IDBObjectStore.prototype.openKeyCursor;
+    const keyScans = vi.spyOn(IDBObjectStore.prototype, 'getAllKeys');
+    const metrics = vi.fn();
+    IDBObjectStore.prototype.openKeyCursor = /** @type {typeof IDBObjectStore.prototype.openKeyCursor} */ (
+      /** @type {unknown} */ (undefined)
+    );
+
+    try {
+      await replaceCanonicalBatch(indexedDB, normalize([]), { onMetrics: metrics });
+    } finally {
+      IDBObjectStore.prototype.openKeyCursor = originalOpenKeyCursor;
+    }
+
+    expect(keyScans).toHaveBeenCalled();
+    expect(metrics).toHaveBeenCalledTimes(1);
+    expect(metrics).toHaveBeenCalledWith(expect.objectContaining({
+      deletedRecords: 2,
+      scannedKeys: 2
+    }));
+    expect(await readCollection(indexedDB, 'repositories')).toEqual([]);
+    keyScans.mockRestore();
+  });
+
+  it('converges after a partial write failure is retried', async () => {
+    const replacement = normalize([]);
+    replacement.repositories = [
+      { id: 'repository:1', fullName: 'githubnext/one' },
+      { id: 'repository:2', fullName: 'githubnext/two' }
+    ];
+    const originalPut = IDBObjectStore.prototype.put;
+    const metrics = vi.fn();
+    let puts = 0;
+    IDBObjectStore.prototype.put = function failingSecondPut(/** @type {unknown} */ value) {
+      puts += 1;
+      if (puts === 2) throw new DOMException('simulated write failure', 'AbortError');
+      return originalPut.call(this, value);
+    };
+
+    try {
+      await expect(replaceCanonicalBatch(indexedDB, replacement, {
+        batchSize: 1,
+        onMetrics: metrics
+      }))
+        .rejects.toThrow('simulated write failure');
+    } finally {
+      IDBObjectStore.prototype.put = originalPut;
+    }
+
+    expect(metrics).toHaveBeenCalledWith(expect.objectContaining({ abortedTransactions: 1 }));
+    expect(metrics).toHaveBeenCalledTimes(1);
+    await expect(replaceCanonicalBatch(indexedDB, replacement, { batchSize: 1 }))
+      .resolves.toBeUndefined();
+    expect(await readCollection(indexedDB, 'repositories')).toEqual(replacement.repositories);
+  });
+
+  it('preserves the original write error when transaction abort also fails', async () => {
+    const replacement = normalize([]);
+    replacement.repositories = [{ id: 'repository:1' }];
+    const originalPut = IDBObjectStore.prototype.put;
+    const originalAbort = IDBTransaction.prototype.abort;
+    const metrics = vi.fn();
+    IDBObjectStore.prototype.put = function failingPut() {
+      throw new DOMException('simulated write failure', 'DataCloneError');
+    };
+    IDBTransaction.prototype.abort = function failingAbort() {
+      throw new DOMException('simulated abort failure', 'InvalidStateError');
+    };
+
+    try {
+      await expect(replaceCanonicalBatch(indexedDB, replacement, { onMetrics: metrics }))
+        .rejects.toThrow('simulated write failure');
+    } finally {
+      IDBObjectStore.prototype.put = originalPut;
+      IDBTransaction.prototype.abort = originalAbort;
+    }
+
+    expect(metrics).toHaveBeenCalledTimes(1);
+    expect(metrics).toHaveBeenCalledWith(expect.objectContaining({ abortedTransactions: 1 }));
+  });
+
   it('evicts records omitted from a supplied previous snapshot', async () => {
     const canonicalBatch = batch();
     await upsertCanonicalBatch(indexedDB, canonicalBatch);
@@ -308,6 +584,70 @@ describe('canonical IndexedDB', () => {
     });
 
     expect(await readCollection(indexedDB, 'repositories')).toEqual([]);
+  });
+
+  it('reconciles large mixed changes without scanning stored keys', async () => {
+    const previous = normalize([]);
+    previous.repositories = Array.from({ length: 20_000 }, (_, index) => ({
+      id: `repository:${index}`,
+      revision: 1
+    }));
+    await upsertCanonicalBatch(indexedDB, previous, { batchSize: 5_000 });
+    const replacement = normalize([]);
+    replacement.repositories = [
+      ...previous.repositories.slice(0, 5_000),
+      ...previous.repositories.slice(5_000, 10_000).map((record) => ({ ...record, revision: 2 })),
+      ...Array.from({ length: 10_000 }, (_, index) => ({
+        id: `repository:${20_000 + index}`,
+        revision: 1
+      }))
+    ];
+    const keyCursors = vi.spyOn(IDBObjectStore.prototype, 'openKeyCursor');
+    const keyScans = vi.spyOn(IDBObjectStore.prototype, 'getAllKeys');
+    const metrics = vi.fn();
+
+    await replaceCanonicalBatch(indexedDB, replacement, {
+      batchSize: 5_000,
+      previousBatch: previous,
+      onMetrics: metrics
+    });
+
+    expect(keyCursors).not.toHaveBeenCalled();
+    expect(keyScans).not.toHaveBeenCalled();
+    expect(metrics).toHaveBeenCalledWith(expect.objectContaining({
+      storedRecords: 15_000,
+      deletedRecords: 10_000,
+      scannedKeys: 0,
+      requestCount: 25_000,
+      abortedTransactions: 0
+    }));
+    const stored = await readCollection(indexedDB, 'repositories');
+    expect(stored).toHaveLength(20_000);
+    expect(stored.find(({ id }) => id === 'repository:5000')).toMatchObject({ revision: 2 });
+    expect(stored.some(({ id }) => id === 'repository:10000')).toBe(false);
+    expect(stored.some(({ id }) => id === 'repository:29999')).toBe(true);
+    keyCursors.mockRestore();
+    keyScans.mockRestore();
+  }, 45_000);
+
+  it('keeps only the newest 1,000 ingestion transactions', async () => {
+    const existing = Array.from({ length: 1_000 }, (_, index) => ({
+      id: `transaction:${String(index).padStart(4, '0')}`,
+      kind: 'fixture',
+      createdAt: new Date(index).toISOString()
+    }));
+    await writeRecords('transactions', existing);
+
+    await recordTransaction(indexedDB, {
+      id: 'transaction:latest',
+      kind: 'fixture',
+      createdAt: new Date(1_000).toISOString()
+    });
+
+    const transactions = await readTransactions(indexedDB);
+    expect(transactions).toHaveLength(1_000);
+    expect(transactions.some(({ id }) => id === 'transaction:0000')).toBe(false);
+    expect(transactions.some(({ id }) => id === 'transaction:latest')).toBe(true);
   });
 
   it('validates relationships before changing stored records', async () => {
@@ -340,11 +680,11 @@ describe('canonical IndexedDB', () => {
     await expect(deleteCanonicalDatabase(indexedDB, { onBlocked })).resolves.toBeUndefined();
   });
 
-  it('rejects the delete if a blocking connection never closes', async () => {
+  it('closes stale connections when another context deletes the database', async () => {
     const database = await openCanonicalDatabase(indexedDB);
 
     await expect(deleteCanonicalDatabase(indexedDB, { blockedTimeoutMs: 20 }))
-      .rejects.toThrow('blocked');
+      .resolves.toBeUndefined();
     database.close();
   });
 
