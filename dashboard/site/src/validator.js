@@ -2745,12 +2745,13 @@ function validateView(view, viewNode, path, viewIds, errors) {
   validateSemanticFieldLiterals(view.data, `${path}.data`, errors);
   validateDatasetMetadata(getValueNodeByKey(viewNode, 'data'), view.data, `${path}.data`, errors);
   if (
-    view.chart === 'heatmap'
+    ['heatmap', 'horizontal-bar'].includes(String(view.chart))
     && (!isPlainObject(view.data) || !Number.isInteger(view.data.limit) || Number(view.data.limit) > 100)
   ) {
+    const chartName = view.chart === 'horizontal-bar' ? 'horizontal-bar' : 'heatmap';
     errors.push(createError(
       ERROR_CODES.invalidScopeFilterTimeAggregationOrOrderReference,
-      'heatmap charts must declare data.limit no greater than 100.',
+      `${chartName} charts must declare data.limit no greater than 100.`,
       `${path}.data.limit`
     ));
   }
@@ -4436,6 +4437,25 @@ function validateChartWidget(encoding, chart, viewPath, errors) {
       'histogram chart x encoding must be nominal or ordinal when explicitly typed.',
       `${viewPath}.encoding.x.type`
     ));
+  }
+  if (chart === 'horizontal-bar' && isPlainObject(encoding.x)) {
+    const xField = typeof encoding.x.field === 'string' ? encoding.x.field : null;
+    const xType = encoding.x.type;
+    const hasNonCategoricalIntrinsicType = xField !== null && (
+      TEMPORAL_FIELD_NAMES.includes(xField)
+      || ADDITIVE_MEASURE_FIELDS.includes(xField)
+      || NON_ADDITIVE_MEASURE_FIELDS.includes(xField)
+    );
+    if (
+      (xType !== undefined && !['nominal', 'ordinal'].includes(String(xType)))
+      || (xType === undefined && hasNonCategoricalIntrinsicType)
+    ) {
+      errors.push(createError(
+        ERROR_CODES.invalidScopeFilterTimeAggregationOrOrderReference,
+        'horizontal-bar chart x encoding must be nominal or ordinal.',
+        `${viewPath}.encoding.x.type`
+      ));
+    }
   }
   if (chart === 'histogram') {
     for (const channel of ['color', 'href']) {
