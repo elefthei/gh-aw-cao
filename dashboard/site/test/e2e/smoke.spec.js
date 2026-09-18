@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
+import { DATABASE_NAME } from '../../src/data/storage/indexeddb.js';
 
 const siteRoot = fileURLToPath(new URL('../..', import.meta.url));
 const authoritativeDashboard = JSON.parse(readFileSync(new URL('../../dashboard.json', import.meta.url), 'utf8'));
@@ -46,6 +47,22 @@ test('shows a not-supported message instead of starting without IndexedDB', asyn
   const alert = page.getByRole('alert');
   await expect(alert).toContainText('Browser not supported');
   await expect(alert).toContainText('This dashboard requires IndexedDB');
+});
+
+test('initializes IndexedDB during dashboard startup', async ({ page }) => {
+  await page.evaluate(async (databaseName) => {
+    await new Promise((resolve, reject) => {
+      const request = indexedDB.deleteDatabase(databaseName);
+      request.onsuccess = () => resolve(undefined);
+      request.onerror = () => reject(request.error);
+      request.onblocked = () => reject(new Error('Unable to clear IndexedDB before startup.'));
+    });
+    await import(new URL('/src/main.js', window.location.href).href);
+  }, DATABASE_NAME);
+
+  await expect.poll(() => page.evaluate(async (databaseName) => (
+    (await indexedDB.databases()).some(({ name }) => name === databaseName)
+  ), DATABASE_NAME)).toBe(true);
 });
 
 /**
