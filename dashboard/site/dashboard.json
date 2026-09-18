@@ -9312,7 +9312,7 @@
           },
           {
             "id": "overview-campaigns",
-            "title": "Campains",
+            "title": "Campaigns",
             "description": "Centrally managed campaigns and their observed execution totals.",
             "data": {
               "source": "campaign-inventory"
@@ -9320,7 +9320,7 @@
             "mark": "list",
             "list": {
               "style": "entity-cards",
-              "layout": "grid",
+              "appearance": "grouped",
               "card": "campaign",
               "icon": "goal",
               "drill": {
