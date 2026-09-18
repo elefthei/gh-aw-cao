@@ -1056,6 +1056,19 @@ describe('dashboard document validation', () => {
       }
     });
     expect(page.definition.views.find((/** @type {{ id: string }} */ view) =>
+      view.id === 'top-workflow-runs'
+    )).toMatchObject({
+      data: { source: 'top-workflow-runs' },
+      mark: 'chart',
+      chart: 'swimlane',
+      layout: 'full-view',
+      encoding: {
+        x: { field: 'started-at', type: 'temporal' },
+        y: { field: 'workflow-label', type: 'ordinal', format: 'workflow-identity-label' },
+        color: { field: 'run-conclusion', type: 'nominal' }
+      }
+    });
+    expect(page.definition.views.find((/** @type {{ id: string }} */ view) =>
       view.id === 'workflows-inventory'
     )).toMatchObject({
       data: { source: 'workflow-inventory' },
@@ -1244,7 +1257,7 @@ dashboard:
     ]);
     expect(workflowsPage.definition.views.map((/** @type {{ id?: string } | string} */ view) =>
       typeof view === 'string' ? view : view.id
-    )).toEqual(['workflows-by-runs', 'workflows-inventory']);
+    )).toEqual(['workflows-by-runs', 'top-workflow-runs', 'workflows-inventory']);
     expect(runsPage.definition.views).toHaveLength(2);
     expect(document.dashboard.navigation.find((/** @type {{ label?: string }} */ section) => !section.label).pages).toEqual([
       'overview',
