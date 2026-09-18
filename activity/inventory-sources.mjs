@@ -390,6 +390,7 @@ export async function discoverWorkflowRegistries(discoveredRepositories, {
   for (const candidate of repositoryCandidates.values()) {
     const repository = String(repositoryFullName(candidate) || "").trim();
     if (!repository) continue;
+    log.info`Discovering workflows for ${repository}`;
     const workflows = [];
     let expected = null;
     let observed = 0;
@@ -450,6 +451,7 @@ export async function discoverWorkflowRegistries(discoveredRepositories, {
       state: failure ? workflows.length > 0 ? "partial" : "unavailable" : "complete",
       failure,
     });
+    log.info`Workflow discovery for ${repository}: ${failure ? workflows.length > 0 ? "partial" : "unavailable" : "complete"}; ${workflows.length} usable of ${observed} observed${expected === null ? "" : `, ${expected} expected`}; ${pages} pages`;
   }
   return registries;
 }
@@ -470,6 +472,7 @@ export async function discoverWorkflowVersions(workflowRegistries, {
   if (!token) throw new Error("GH_TOKEN or GITHUB_TOKEN is required to discover workflow versions");
   const enriched = [];
   for (const registry of workflowRegistries) {
+    log.info`Discovering compiler versions for ${registry.workflows?.length || 0} workflows in ${registry.repository}`;
     const versionFailures = [];
     const workflows = [];
     for (const workflow of registry.workflows || []) {
@@ -510,6 +513,7 @@ export async function discoverWorkflowVersions(workflowRegistries, {
       versionFailures,
       versionState: versionFailures.length === 0 ? "complete" : workflows.length > 0 ? "partial" : "unavailable",
     });
+    log.info`Workflow compiler version discovery for ${registry.repository}: ${workflows.length - versionFailures.length} resolved, ${versionFailures.length} unresolved`;
   }
   return enriched;
 }
@@ -921,6 +925,41 @@ export function buildInventoryDashboardSources({
   };
 }
 
+export async function discoverInventoryDashboardSources({
+  inventory,
+  controlSettings,
+  repository,
+} = {}) {
+  const discoveredRepositories = await discoverRepositories(controlSettings, { controlRepository: repository });
+  log.info`Repository discovery selected ${discoveredRepositories.length} repositories`;
+  log.info`Starting workflow registry, package version, and gh-aw release discovery`;
+  const [rawWorkflowRegistries, latestPackageResolution, latestGhAwResolution] = await Promise.all([
+    discoverWorkflowRegistries(discoveredRepositories, { controlRepository: repository }),
+    discoverLatestPackageCommits(inventory),
+    discoverLatestGhAwVersion().then((version) => ({ version, failure: null })).catch((error) => ({
+      version: null,
+      failure: versionFailure(
+        "github/gh-aw",
+        "gh-aw-version-discovery",
+        error?.status,
+        error?.message || String(error),
+      ),
+    })),
+  ]);
+  const workflowRegistries = await discoverWorkflowVersions(rawWorkflowRegistries);
+  log.info`Workflow discovery completed for ${workflowRegistries.length} repository registries`;
+  return buildInventoryDashboardSources({
+    inventory,
+    controlSettings,
+    discoveredRepositories,
+    workflowRegistries,
+    latestPackageResolution,
+    latestGhAwVersion: latestGhAwResolution.version,
+    latestGhAwFailure: latestGhAwResolution.failure,
+    repository,
+  });
+}
+
 export async function main() {
   const inventoryPath = process.env.REPORT_INVENTORY;
   const controlSettingsPath = process.env.REPORT_CONTROL_SETTINGS;
@@ -936,29 +975,9 @@ export async function main() {
       readFile(inventoryPath, "utf8").then(JSON.parse),
       readFile(controlSettingsPath, "utf8").then(JSON.parse),
     ]);
-    const discoveredRepositories = await discoverRepositories(controlSettings);
-    const [rawWorkflowRegistries, latestPackageResolution, latestGhAwResolution] = await Promise.all([
-      discoverWorkflowRegistries(discoveredRepositories, { controlRepository: repository }),
-      discoverLatestPackageCommits(inventory),
-      discoverLatestGhAwVersion().then((version) => ({ version, failure: null })).catch((error) => ({
-        version: null,
-        failure: versionFailure(
-          "github/gh-aw",
-          "gh-aw-version-discovery",
-          error?.status,
-          error?.message || String(error),
-        ),
-      })),
-    ]);
-    const workflowRegistries = await discoverWorkflowVersions(rawWorkflowRegistries);
-    const sources = buildInventoryDashboardSources({
+    const sources = await discoverInventoryDashboardSources({
       inventory,
       controlSettings,
-      discoveredRepositories,
-      workflowRegistries,
-      latestPackageResolution,
-      latestGhAwVersion: latestGhAwResolution.version,
-      latestGhAwFailure: latestGhAwResolution.failure,
       repository,
     });
     await writeFile(path.resolve(outputPath), `${JSON.stringify(sources, null, 2)}\n`);
