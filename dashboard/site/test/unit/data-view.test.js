@@ -14,11 +14,40 @@ const metadata = {
   freshness: /** @type {'fresh'} */ ('fresh')
 };
 
+function stubIntersectionObserver() {
+  /** @type {Map<Element, IntersectionObserverCallback>} */
+  const callbacks = new Map();
+  class IntersectionObserverStub {
+    /** @type {IntersectionObserverCallback} */
+    callback;
+
+    /** @param {IntersectionObserverCallback} callback */
+    constructor(callback) {
+      this.callback = callback;
+    }
+
+    /** @param {Element} element */
+    observe(element) {
+      callbacks.set(element, this.callback);
+    }
+
+    disconnect() {}
+  }
+  vi.stubGlobal('IntersectionObserver', IntersectionObserverStub);
+  /** @param {Element} element */
+  const intersect = (element) => callbacks.get(element)?.(
+    /** @type {IntersectionObserverEntry[]} */ (/** @type {unknown} */ ([{ target: element, isIntersecting: true }])),
+    /** @type {IntersectionObserver} */ (/** @type {unknown} */ ({}))
+  );
+  return intersect;
+}
+
 describe('data view renderer', () => {
   afterEach(() => {
     window.localStorage.clear();
     window.history.replaceState({}, '', '/');
     setDeclaredCliActions([]);
+    vi.unstubAllGlobals();
   });
 
   it('renders a unit-bearing metric selected by the JSON mark', () => {
@@ -626,6 +655,7 @@ describe('data view renderer', () => {
   });
 
   it('replays continuation pages when table and mobile card modes load the same rows', async () => {
+    const intersect = stubIntersectionObserver();
     const load = vi.fn(async () => ({
       rows: [{ event: 'event-26' }],
       continuationToken: undefined
@@ -656,10 +686,11 @@ describe('data view renderer', () => {
     expect(tableMore).toBeInstanceOf(HTMLButtonElement);
     /** @type {HTMLButtonElement} */ (tableMore).click();
     await vi.waitFor(() => expect(rendered?.querySelectorAll('tbody tr')).toHaveLength(26));
-    const cardMore = rendered?.querySelector('[data-card-list-more]');
-    expect(cardMore).toBeInstanceOf(HTMLButtonElement);
-    /** @type {HTMLButtonElement} */ (cardMore).click();
-    await vi.waitFor(() => expect(rendered?.querySelectorAll('[data-mobile-card-list] li')).toHaveLength(26));
+    const cardBoundary = /** @type {HTMLElement} */ (rendered?.querySelector('[data-card-list-boundary]'));
+    expect(cardBoundary).toBeInstanceOf(HTMLElement);
+    expect(rendered?.querySelector('[data-card-list-more]')).toBeNull();
+    intersect(cardBoundary);
+    await vi.waitFor(() => expect(rendered?.querySelectorAll('[data-mobile-card-list] .entity-card-list-card')).toHaveLength(26));
     expect(load).toHaveBeenCalledTimes(1);
   });
 
@@ -845,7 +876,8 @@ describe('data view renderer', () => {
       .toEqual(['11Success', '3Failures', '2.50Average AIC']);
   });
 
-  it('lets a mobile card continuation retry after a load failure', async () => {
+  it('lets a mobile card continuation retry on scroll after a load failure', async () => {
+    const intersect = stubIntersectionObserver();
     const load = vi.fn()
       .mockRejectedValueOnce(new Error('worker unavailable'))
       .mockResolvedValueOnce({ rows: [{ event: 'event-26' }], continuationToken: undefined });
@@ -870,13 +902,14 @@ describe('data view renderer', () => {
       toText: String,
       continuation: { token: 'page-2', totalRows: 26, load }
     });
-    const more = /** @type {HTMLButtonElement} */ (rendered?.querySelector('[data-card-list-more]'));
+    const boundary = /** @type {HTMLElement} */ (rendered?.querySelector('[data-card-list-boundary]'));
 
-    more.click();
-    await vi.waitFor(() => expect(more.textContent).toBe('Retry loading cards'));
-    expect(more.disabled).toBe(false);
-    more.click();
-    await vi.waitFor(() => expect(rendered?.querySelectorAll('[data-mobile-card-list] li')).toHaveLength(26));
+    expect(boundary).toBeInstanceOf(HTMLElement);
+    expect(rendered?.querySelector('[data-card-list-more]')).toBeNull();
+    intersect(boundary);
+    await vi.waitFor(() => expect(boundary.dataset.loadState).toBe('error'));
+    rendered?.querySelector('.mobile-table-card-list-items')?.dispatchEvent(new Event('scroll'));
+    await vi.waitFor(() => expect(rendered?.querySelectorAll('[data-mobile-card-list] .entity-card-list-card')).toHaveLength(26));
     expect(load).toHaveBeenCalledTimes(2);
   });
 
