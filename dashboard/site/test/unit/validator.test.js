@@ -515,8 +515,8 @@ describe('dashboard document validation', () => {
 
   it('defines every other editable experimental page as one full-view lazy table', () => {
     // Pages that intentionally compose more than one editable view, asserted separately below
-    // or by their own focused suites: safe-outputs, maintenance, entity cards, operational value, cost, and audit.
-    const multiViewPageIds = new Set(['safe-outputs', 'maintenance', 'issues', 'pull-requests', 'operational-value', 'cost', 'audit']);
+    // or by their own focused suites: safe-outputs, maintenance, entity cards, operational value, cost, performance, and audit.
+    const multiViewPageIds = new Set(['safe-outputs', 'maintenance', 'issues', 'pull-requests', 'operational-value', 'cost', 'performance', 'audit']);
     const document = JSON.parse(authoritativeDashboardSource);
     const experimentalIds = new Set(document.dashboard.navigation
       .filter((/** @type {{ experimental?: boolean }} */ section) => section.experimental)
@@ -1711,18 +1711,7 @@ dashboard:
   it('DLS-VIEW-005 accepts bounded heatmaps and rejects invalid axes, values, and limits', () => {
     const document = JSON.parse(authoritativeDashboardSource);
     const performance = document.dashboard.pages.find((/** @type {{ id: string }} */ page) => page.id === 'performance');
-    const heatmap = {
-      id: 'job-duration-by-job-runner',
-      data: { source: 'job-performance', limit: 100 },
-      mark: 'chart',
-      chart: 'heatmap',
-      encoding: {
-        x: { field: 'job', type: 'nominal' },
-        y: { field: 'runner', type: 'nominal' },
-        color: { field: 'job-duration-seconds', type: 'quantitative', aggregate: 'mean' }
-      }
-    };
-    performance.views.push(heatmap);
+    const heatmap = performance.views.find((/** @type {{ id?: string }} */ view) => view.id === 'job-duration-by-runner');
 
     expect(heatmap).toMatchObject({
       chart: 'heatmap',
