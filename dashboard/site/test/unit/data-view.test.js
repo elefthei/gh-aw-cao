@@ -138,6 +138,20 @@ describe('data view renderer', () => {
         icon: 'eye',
         command: './.github/aw/cao.sh mode preview {{package}}',
         placement: 'row'
+      },
+      {
+        id: 'enable-package',
+        label: 'Enable',
+        icon: 'play',
+        command: './.github/aw/cao.sh enable {{package}}',
+        placement: 'row'
+      },
+      {
+        id: 'disable-package',
+        label: 'Disable',
+        icon: 'stop',
+        command: './.github/aw/cao.sh disable {{package}}',
+        placement: 'row'
       }
     ], { canExecute: false });
 
@@ -178,6 +192,20 @@ describe('data view renderer', () => {
               label: 'Switch to preview',
               context: ['package'],
               when: { field: 'package-mode', equals: 'live' }
+            },
+            {
+              action: 'enable-package',
+              presentation: 'cli-action',
+              icon: 'play',
+              label: 'Enable',
+              context: ['package']
+            },
+            {
+              action: 'disable-package',
+              presentation: 'cli-action',
+              icon: 'stop',
+              label: 'Disable',
+              context: ['package']
             }
           ]
         }
@@ -212,9 +240,17 @@ describe('data view renderer', () => {
 
     expect(rendered?.querySelectorAll('.document-list-card')).toHaveLength(2);
     expect(rendered?.querySelector('.document-list-header .declared-cli-action')?.textContent).toContain('Update all');
-    expect(rendered?.querySelectorAll('.document-list-card .table-cli-action-control')).toHaveLength(3);
+    expect(rendered?.querySelectorAll('.document-list-card .table-cli-action-control')).toHaveLength(7);
     expect(rendered?.textContent).toContain('Switch to live');
     expect(rendered?.textContent).toContain('Switch to preview');
+    expect(rendered?.textContent).toContain('Enable');
+    expect(rendered?.textContent).toContain('Disable');
+    expect([...rendered?.querySelectorAll('.cli-action-command') ?? []].map((element) => element.textContent)).toEqual(
+      expect.arrayContaining([
+        './.github/aw/cao.sh enable remote-agent',
+        './.github/aw/cao.sh disable ci-doctor'
+      ])
+    );
     expect(rendered?.textContent).not.toContain('update-available');
   });
 
