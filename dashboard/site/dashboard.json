@@ -9751,8 +9751,8 @@
       {
         "pages": [
           "overview",
-          "repositories",
           "campaigns",
+          "repositories",
           "configuration"
         ]
       },

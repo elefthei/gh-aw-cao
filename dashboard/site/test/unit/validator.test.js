@@ -1277,8 +1277,8 @@ dashboard:
     expect(runsPage.definition.views).toHaveLength(2);
     expect(document.dashboard.navigation.find((/** @type {{ label?: string }} */ section) => !section.label).pages).toEqual([
       'overview',
-      'repositories',
       'campaigns',
+      'repositories',
       'configuration'
     ]);
     expect(document.dashboard.navigation.find((/** @type {{ label?: string }} */ section) => section.label === 'Data').pages).toEqual([
