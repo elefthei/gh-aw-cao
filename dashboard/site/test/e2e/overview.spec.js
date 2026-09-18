@@ -32,6 +32,21 @@ const sources = {
   'overview-factory-status': source('overview-factory-status', [{ 'factory-heading': 'Your factory is delivering value.' }]),
   'overview-registered-repository-summary': source('overview-registered-repository-summary', [{ 'registered-repositories': 6 }]),
   'overview-worker-summary': source('overview-worker-summary', [{ workers: 3 }]),
+  'campaign-inventory': source('campaign-inventory', [{
+    campaign: 'aw-doctor',
+    'campaign-name': 'AW Doctor',
+    'campaign-dashboard-link': {
+      'dashboard-href': '#page-campaign-detail?campaign=aw-doctor',
+      'dashboard-label': 'View AW Doctor campaign dashboard'
+    },
+    workflows: 3,
+    modes: ['review'],
+    registration: ['active'],
+    runs: 20,
+    'value-created': 7,
+    dispatches: 12,
+    aic: 42
+  }]),
   'overview-rhythm': source('overview-rhythm', [{
     rhythm: {
       days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((label, index) => ({
@@ -81,6 +96,7 @@ test('declarative Overview views preserve desktop and mobile behavior', async ({
         dashboard: {
           id: 'overview-parity',
           title: 'Overview parity',
+          'card-templates': dashboardDocument.dashboard['card-templates'],
           pages: [pageDefinition]
         }
       },
@@ -98,10 +114,15 @@ test('declarative Overview views preserve desktop and mobile behavior', async ({
     const factory = await render(overviewPage);
 
     await expect(factory).toBeVisible();
-    await expect(factory.locator('.dashboard-lazy-view')).toHaveCount(0);
     await expect(factory.locator(':scope > [data-view-id="overview-header"]')).toHaveClass(/factory-intro/);
     await expect(factory.locator(':scope > [data-view-id="overview-floor"]')).toHaveClass(/factory-floor/);
+    await expect(factory.locator(':scope > [data-view-id="overview-campaigns"]')).toHaveClass(/custom-view/);
     await expect(factory.locator(':scope > .factory-intro + .factory-floor')).toHaveCount(1);
+    await expect(factory.getByRole('heading', { name: 'Campains' })).toBeVisible();
+    await expect(factory.getByRole('link', { name: 'AW Doctor' }))
+      .toHaveAttribute('href', '#page-campaign-detail?campaign=aw-doctor');
+    await expect(factory.locator('.entity-card-list-card')).toHaveCount(1);
+    await expect(factory.locator('.entity-card-list-card dt')).toHaveText(['Workflows', 'Value', 'Dispatches', 'AIC']);
     await expect(factory.getByRole('heading', { name: 'Your factory is delivering value.' })).toBeVisible();
     await expect(factory.locator('.factory-running-active')).toBeVisible();
     await expect(factory.locator('.factory-rhythm-day')).toHaveCount(7);
@@ -132,6 +153,7 @@ test('disables Overview rhythm animation when reduced motion is preferred', asyn
       dashboard: {
         id: 'overview-reduced-motion',
         title: 'Overview reduced motion',
+        'card-templates': dashboardDocument.dashboard['card-templates'],
         pages: [overviewPage]
       }
     },
@@ -142,7 +164,7 @@ test('disables Overview rhythm animation when reduced motion is preferred', asyn
   await expect(page.locator('.factory-rhythm-bar-pair i:not([hidden])').first()).toHaveCSS('animation-name', 'none');
 });
 
-test('renders the factory structure immediately with only unresolved widgets pending', async ({ page }) => {
+test('waits for page data before rendering mixed factory and campaign views', async ({ page }) => {
   const immediate = await page.evaluate(async ({ documentModel, presenterModuleUrl, sourceStoreModuleUrl }) => {
     const [{ renderDashboard }, { configureSourceLoader }] = await Promise.all([
       import(presenterModuleUrl),
@@ -192,17 +214,17 @@ test('renders the factory structure immediately with only unresolved widgets pen
   });
 
   expect(immediate).toEqual({
-    sourceLoadCalls: 11,
+    sourceLoadCalls: 0,
     pageLoadCalls: 1,
-    header: true,
-    floor: true,
-    pageSkeletons: 0,
-    pageBusy: null,
-    headerBusy: null,
-    floorBusy: null,
-    runningPending: 1,
-    headingPending: 1,
-    rhythmPending: 1,
-    stationsPending: 4
+    header: false,
+    floor: false,
+    pageSkeletons: 1,
+    pageBusy: 'true',
+    headerBusy: undefined,
+    floorBusy: undefined,
+    runningPending: 0,
+    headingPending: 0,
+    rhythmPending: 0,
+    stationsPending: 0
   });
 });

@@ -1125,6 +1125,20 @@ describe('dashboard document validation', () => {
       element: 'factory-floor',
       config: expect.objectContaining({ animate: 'number' }),
       layout: 'full'
+    }),
+      expect.objectContaining({
+      id: 'overview-campaigns',
+      title: 'Campains',
+      data: { source: 'campaign-inventory' },
+      mark: 'list',
+      list: {
+        style: 'entity-cards',
+        layout: 'grid',
+        card: 'campaign',
+        icon: 'goal',
+        drill: { type: 'external', field: 'campaign-dashboard-link' }
+      },
+      layout: 'full'
     })]);
     expect(validateDashboardDocument(authoritativeDashboardSource).ok).toBe(true);
   });
