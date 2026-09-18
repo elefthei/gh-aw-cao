@@ -324,6 +324,8 @@ describe('dashboard document validation', () => {
       (/** @type {{ id: string }} */ action) => action.id === starterList.list.action
     );
 
+    expect(starterList.title).toBe('Packages');
+    expect(starterList.description).toBe('Update installed packages when a newer package revision is available.');
     expect(validateDashboardDocument(JSON.stringify(document)).ok).toBe(true);
 
     starterList.list.style = 'rows';
@@ -564,7 +566,7 @@ describe('dashboard document validation', () => {
       (/** @type {{ id: string }} */ page) => page.id === 'maintenance'
     )?.views).toEqual([
       expect.objectContaining({
-        id: 'starter-updates',
+        id: 'package-updates',
         mark: 'list',
         list: {
           style: 'cards',
