@@ -5382,6 +5382,73 @@ dashboard:
     expect(result.ok).toBe(true);
   });
 
+  it('DLS-VIEW-005 accepts aggregated area charts over temporal or ordered dimensions', () => {
+    const areaDocument = `language-version: "0.1.0"
+dashboard:
+  id: area-charts
+  title: Area Charts
+  queries:
+    - name: area-values
+      intent: Expose AI Credits with a canonical additive field name.
+      from: runs
+      select:
+        - { field: started-at }
+        - { field: workflow }
+        - { field: aic-total, as: aic }
+  pages:
+    - id: cost
+      kind: custom
+      views:
+        - id: aic-over-time
+          data:
+            source: area-values
+          mark: chart
+          chart: area
+          encoding:
+            x:
+              field: started-at
+              type: temporal
+              time-unit: day
+            y:
+              field: aic
+              type: quantitative
+              aggregate: sum
+            color:
+              field: workflow
+              type: nominal
+        - id: ordered-volume
+          data:
+            source: runs
+          mark: chart
+          chart: area
+          encoding:
+            x:
+              field: run-conclusion
+              type: ordinal
+            y:
+              field: run
+              type: quantitative
+              aggregate: count
+`;
+    const valid = validateDashboardDocument(areaDocument);
+    expect(valid.ok).toBe(true);
+
+    const invalid = validateDashboardDocument(areaDocument.replace(
+      `field: started-at
+              type: temporal
+              time-unit: day`,
+      `field: workflow
+              type: nominal`
+    ));
+    expect(invalid.ok).toBe(false);
+    if (!invalid.ok) {
+      expect(invalid.errors).toContainEqual(expect.objectContaining({
+        code: 'DLS-E010',
+        path: '$.dashboard.pages[0].views[0].encoding.x.type'
+      }));
+    }
+  });
+
   it('DLS-VIEW-005 accepts multiple named measures only for line charts without color', () => {
     const valid = validateDashboardDocument(`language-version: "0.1.0"
 dashboard:
