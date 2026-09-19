@@ -31,12 +31,16 @@ const pending = new Map();
  *   registeredWorker: Worker | null,
  *   latest: Record<string, import('./presenter.js').LogicalSourceInput> | null,
  *   snapshot: Record<string, import('./presenter.js').LogicalSourceInput> | null,
+ *   snapshotRevision: number | null,
  *   frame: number | null,
  *   emitCurrent: boolean
  * }} ViewSubscription
  */
 /** @type {Map<string, ViewSubscription>} */
 const subscriptions = new Map();
+/** @type {Map<string, ViewSubscription>} */
+const cachedSubscriptions = new Map();
+const MAX_CACHED_VIEW_SUBSCRIPTIONS = 24;
 /** @type {Map<string, ReturnType<typeof publishNotification>>} */
 const workerNotificationHandles = new Map();
 /** @type {Set<string>} */
@@ -319,6 +323,13 @@ export function subscribeCanonicalDashboardView(viewId, sourceNames, context, li
       throw new Error(`Canonical dashboard view ${viewId} is already subscribed with different query parameters.`);
     }
   } else {
+    const cached = cachedSubscriptions.get(viewId);
+    const reusable = options.emitCurrent !== false
+      && cached
+      && sameSubscription(cached, sourceNames, context, pagination, options)
+      ? cached
+      : null;
+    cachedSubscriptions.delete(viewId);
     subscription = {
       id: viewId,
       sourceNames: [...sourceNames],
@@ -330,7 +341,8 @@ export function subscribeCanonicalDashboardView(viewId, sourceNames, context, li
       listeners: new Set(),
       registeredWorker: null,
       latest: null,
-      snapshot: null,
+      snapshot: reusable?.snapshot ?? null,
+      snapshotRevision: reusable?.snapshotRevision ?? null,
       frame: null,
       emitCurrent: options.emitCurrent !== false
     };
@@ -345,7 +357,7 @@ export function subscribeCanonicalDashboardView(viewId, sourceNames, context, li
   subscription.listeners.add(listenerEntry);
   if (subscription.snapshot && subscription.frame === null) {
     const snapshot = subscription.snapshot;
-    scheduleSubscriber(listenerEntry, subscription, () => listener(snapshot));
+    invokeSubscriber(() => listener(snapshot));
   }
   const unsubscribeFromSignal = () => unsubscribe();
   options.signal?.addEventListener('abort', unsubscribeFromSignal, { once: true });
@@ -363,8 +375,20 @@ export function subscribeCanonicalDashboardView(viewId, sourceNames, context, li
     current.listeners.delete(listenerEntry);
     if (current.listeners.size > 0) return;
     subscriptions.delete(viewId);
+    cachedSubscriptions.delete(viewId);
+    cachedSubscriptions.set(viewId, current);
+    while (cachedSubscriptions.size > MAX_CACHED_VIEW_SUBSCRIPTIONS) {
+      const oldest = cachedSubscriptions.keys().next().value;
+      if (oldest === undefined) break;
+      const evicted = cachedSubscriptions.get(oldest);
+      cachedSubscriptions.delete(oldest);
+      evicted?.registeredWorker?.postMessage({
+        operation: 'unsubscribe-canonical-dashboard',
+        subscriptionId: oldest
+      });
+      if (evicted) evicted.registeredWorker = null;
+    }
     current.latest = null;
-    current.snapshot = null;
     if (current.frame !== null && typeof globalThis.cancelAnimationFrame === 'function') {
       globalThis.cancelAnimationFrame(current.frame);
     }
@@ -466,8 +490,12 @@ function registerSubscription(processor, subscription) {
  * Retains only the newest worker payload until the current microtask completes.
  * @param {ViewSubscription} subscription
  * @param {Record<string, import('./presenter.js').LogicalSourceInput>} sources
+ * @param {unknown} revision
  */
-function enqueueSubscriptionUpdate(subscription, sources) {
+function enqueueSubscriptionUpdate(subscription, sources, revision) {
+  if (Number.isSafeInteger(revision)
+      && subscription.snapshot
+      && subscription.snapshotRevision === revision) return;
   subscription.latest = sources;
   for (const listener of subscription.listeners) cancelSubscriberFrame(listener);
   if (subscription.frame !== null) return;
@@ -477,6 +505,7 @@ function enqueueSubscriptionUpdate(subscription, sources) {
     subscription.latest = null;
     if (!latest || subscriptions.get(subscription.id) !== subscription) return;
     subscription.snapshot = latest;
+    subscription.snapshotRevision = Number.isSafeInteger(revision) ? Number(revision) : null;
     batch(() => {
       for (const listener of [...subscription.listeners]) {
         if (subscription.listeners.has(listener)) invokeSubscriber(() => listener.notify(latest));
@@ -487,26 +516,6 @@ function enqueueSubscriptionUpdate(subscription, sources) {
     subscription.frame = globalThis.requestAnimationFrame(flush);
   } else {
     subscription.frame = 0;
-    queueMicrotask(flush);
-  }
-}
-
-/** @param {SubscriptionListener} listener @param {ViewSubscription} subscription @param {() => void} notify */
-function scheduleSubscriber(listener, subscription, notify) {
-  let scheduledFrame = 0;
-  const flush = () => {
-    if (listener.frame !== scheduledFrame) return;
-    listener.frame = null;
-    if (subscriptions.get(subscription.id) === subscription
-        && subscription.listeners.has(listener)) {
-      batch(() => invokeSubscriber(notify));
-    }
-  };
-  if (typeof globalThis.requestAnimationFrame === 'function') {
-    scheduledFrame = globalThis.requestAnimationFrame(flush);
-    listener.frame = scheduledFrame;
-  } else {
-    listener.frame = 0;
     queueMicrotask(flush);
   }
 }
@@ -607,7 +616,7 @@ function getWorker() {
       const subscription = subscriptions.get(event.data.subscriptionId);
       if (subscription?.registeredWorker === processor
           && event.data.data && typeof event.data.data === 'object') {
-        enqueueSubscriptionUpdate(subscription, event.data.data);
+        enqueueSubscriptionUpdate(subscription, event.data.data, event.data.revision);
       } else if (subscription?.registeredWorker === processor
           && typeof event.data.error === 'string') {
         const error = new Error(event.data.error);

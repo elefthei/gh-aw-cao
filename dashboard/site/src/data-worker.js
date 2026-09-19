@@ -45,7 +45,6 @@ async function* responseChunks(body) {
 
 /** @type {{ logicalSources: Record<string, import('./presenter.js').LogicalSourceInput>, revision: number } | null} */
 let liveDashboard = null;
-let dashboardActivated = false;
 let runPhaseOnly = false;
 const dashboardQueryMemoization = createDashboardQueryMemoization();
 /**
@@ -121,6 +120,7 @@ function pageScopedSources(sources, requested) {
  * @param {{ filters?: Record<string, string[]>, timeWindow?: { start?: string, end?: string }, viewMode?: 'chart'|'table'|'card' }} [queryContext]
  * @param {string} [viewId]
  * @param {typeof liveDashboard} [dashboard]
+ * @param {string} [cacheId]
  */
 async function queryLiveDashboard(
   requested,
@@ -132,20 +132,22 @@ async function queryLiveDashboard(
   routeParameters,
   queryContext,
   viewId,
-  dashboard = liveDashboard
+  dashboard = liveDashboard,
+  cacheId = undefined
 ) {
   dashboard ??= await loadActiveDashboard();
   if (signal?.aborted) throw new DashboardQueryCancelledError('dashboard queries were cancelled', 'aborted');
-  const key = dashboardQueryMemoizationKey([
-    [...requested].sort(),
+  const key = dashboardQueryKey(
+    requested,
     context,
     requestContext,
     pagination,
     pageId,
     routeParameters,
     queryContext,
-    viewId
-  ]);
+    viewId,
+    cacheId
+  );
   return dashboardQueryMemoization.get(dashboard.revision, key, async () => {
     const required = resolveDashboardQuerySources(context.queries, requested);
     const canonicalPayload = await queryCanonicalViewSources(
@@ -195,6 +197,41 @@ async function queryLiveDashboard(
       continuationRevision(context.queries, dashboard.revision)
     );
   });
+}
+
+/**
+ * @param {Set<string>} requested
+ * @param {ReturnType<typeof dashboardContext>} context
+ * @param {{ githubUrlBase?: string, dashboardRepository?: string | null }} requestContext
+ * @param {Record<string, { limit: number, continuationToken?: string }>} pagination
+ * @param {string | undefined} pageId
+ * @param {Record<string, string> | undefined} routeParameters
+ * @param {DashboardSubscription['queryContext']} queryContext
+ * @param {string | undefined} viewId
+ * @param {string | undefined} cacheId
+ */
+function dashboardQueryKey(
+  requested,
+  context,
+  requestContext,
+  pagination,
+  pageId,
+  routeParameters,
+  queryContext,
+  viewId,
+  cacheId
+) {
+  return dashboardQueryMemoizationKey([
+    cacheId,
+    [...requested].sort(),
+    context,
+    requestContext,
+    pagination,
+    pageId,
+    routeParameters,
+    queryContext,
+    viewId
+  ]);
 }
 
 /** @param {Record<string, import('./presenter.js').LogicalSourceInput>} sources */
@@ -262,13 +299,14 @@ async function flushDashboardSubscriptions(allowDuringIngestion = false) {
             subscription.routeParameters,
             subscription.queryContext,
             subscription.viewId,
-            dashboard
+            dashboard,
+            id
           );
           if (dashboardSubscriptions.get(id) === subscription && liveDashboard === dashboard) {
             subscription.emitted = true;
             subscription.revision = dashboard.revision;
             subscription.pagination = pagination;
-            workerScope?.postMessage({ subscriptionId: id, data });
+            workerScope?.postMessage({ subscriptionId: id, revision: dashboard.revision, data });
           }
         } catch (error) {
           if (dashboardSubscriptions.get(id) === subscription && liveDashboard === dashboard) {
@@ -309,7 +347,6 @@ function refreshDashboardSubscriptions(logicalSources, runsOnly) {
     logicalSources,
     revision: (liveDashboard?.revision ?? 0) + 1
   };
-  dashboardActivated = true;
   runPhaseOnly = runsOnly;
   scheduleDashboardSubscriptions(runsOnly
     ? [...dashboardSubscriptions]
@@ -694,13 +731,14 @@ export function processDataRequest(request, signal) {
         }
         if (signal?.aborted) throw new DashboardQueryCancelledError('data ingestion was cancelled', 'aborted');
         progress.log('Refreshing active dashboard queries.');
-        const nextRevision = (liveDashboard?.revision ?? 0)
-          + (!dashboardActivated || changed ? 1 : 0);
+        // A different tab may have committed the current payload to IndexedDB,
+        // leaving this worker's in-memory query results stale even when this
+        // ingestion reports no local writes.
+        const nextRevision = (liveDashboard?.revision ?? 0) + 1;
         liveDashboard = {
           logicalSources: /** @type {Record<string, import('./presenter.js').LogicalSourceInput>} */ (sources),
           revision: nextRevision
         };
-        dashboardActivated = true;
         runPhaseOnly = false;
         scheduleDashboardSubscriptions();
         progress.complete();
@@ -813,10 +851,28 @@ if (typeof document === 'undefined' && workerScope) {
           emitted: false
         };
         dashboardSubscriptions.set(subscriptionId, subscription);
-        if (liveDashboard
-          && event.data.emitCurrent !== false
-          && (!runPhaseOnly || isRunPhaseSubscription(subscription))) {
-          scheduleDashboardSubscriptions([subscriptionId]);
+        if (liveDashboard && event.data.emitCurrent !== false) {
+          const key = dashboardQueryKey(
+            new Set(subscription.sourceNames),
+            subscription.context,
+            subscription.requestContext,
+            subscription.pagination,
+            subscription.pageId,
+            subscription.routeParameters,
+            subscription.queryContext,
+            subscription.viewId,
+            subscriptionId
+          );
+          const cached = dashboardQueryMemoization.peek(key);
+          if (cached) {
+            subscription.emitted = true;
+            subscription.revision = cached.revision;
+            workerScope.postMessage({ subscriptionId, revision: cached.revision, data: cached.value });
+          }
+          if ((!cached || cached.revision !== liveDashboard.revision)
+              && (!runPhaseOnly || isRunPhaseSubscription(subscription))) {
+            scheduleDashboardSubscriptions([subscriptionId]);
+          }
         }
       } catch (error) {
         // Remove any partially-registered subscription so it cannot linger
