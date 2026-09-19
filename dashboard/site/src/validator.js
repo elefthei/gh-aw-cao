@@ -113,6 +113,7 @@ import {
   VIEW_LIST_DRILL_TYPE_VALUES,
   VIEW_LIST_LAYOUT_VALUES,
   VIEW_LIST_APPEARANCE_VALUES,
+  VIEW_LIST_VIEW_ALL_KEYS,
   VIEW_DISCLOSURE_VALUES,
   VIEW_ENCODING_KEYS,
   VIEW_ELEMENT_CONFIG_KEYS,
@@ -1122,6 +1123,16 @@ function validateDashboard(dashboard, dashboardNode, errors) {
             ERROR_CODES.missingOrInvalidRequiredField,
             'metric navigation-page must reference a declared dashboard page id.',
             `${viewPath}.metric.navigation-page`
+          ));
+        }
+        const viewAllPage = isPlainObject(view) && isPlainObject(view.list) && isPlainObject(view.list['view-all'])
+          ? view.list['view-all'].page
+          : undefined;
+        if (typeof viewAllPage === 'string' && IDENTIFIER_PATTERN.test(viewAllPage) && !pageIds.has(viewAllPage)) {
+          errors.push(createError(
+            ERROR_CODES.missingOrInvalidRequiredField,
+            'list view-all page must reference a declared dashboard page id.',
+            `${viewPath}.list.view-all.page`
           ));
         }
         const drill = isPlainObject(view) && isPlainObject(view.list) && isPlainObject(view.list.drill)
@@ -2680,6 +2691,7 @@ function validateView(view, viewNode, path, viewIds, errors) {
         errors.push(createError(ERROR_CODES.missingOrInvalidRequiredField, 'list.card is supported only for entity-cards lists.', `${listPath}.card`));
       }
       validateListDrill(view.list.drill, getValueNodeByKey(getValueNodeByKey(viewNode, 'list'), 'drill'), listPath, view.list.style, errors);
+      validateListViewAll(view.list['view-all'], getValueNodeByKey(getValueNodeByKey(viewNode, 'list'), 'view-all'), listPath, view.list.style, errors);
     }
     if (view.mark !== 'list') {
       errors.push(createError(ERROR_CODES.invalidScopeFilterTimeAggregationOrOrderReference, 'list is allowed only when mark is "list".', listPath));
@@ -3021,6 +3033,31 @@ function validateListDrill(drill, drillNode, listPath, style, errors) {
       errors.push(createError(ERROR_CODES.unknownOrDuplicateKey, 'query drill argument names must be unique.', `${argumentPath}.name`));
     }
     names.add(argument.name);
+  }
+}
+
+/**
+ * @param {unknown} viewAll
+ * @param {unknown} viewAllNode
+ * @param {string} listPath
+ * @param {unknown} style
+ * @param {ValidationError[]} errors
+ */
+function validateListViewAll(viewAll, viewAllNode, listPath, style, errors) {
+  const path = `${listPath}.view-all`;
+  if (viewAll === undefined) return;
+  if (style !== 'entity-cards') {
+    errors.push(createError(ERROR_CODES.missingOrInvalidRequiredField, 'list.view-all is supported only for entity-cards lists.', path));
+    return;
+  }
+  if (!isPlainObject(viewAll)) {
+    errors.push(createError(ERROR_CODES.missingOrInvalidRequiredField, 'list.view-all must be a mapping.', path));
+    return;
+  }
+  validateObjectKeys(viewAllNode, VIEW_LIST_VIEW_ALL_KEYS, path, errors);
+  validateRequiredIdentifier(viewAll.page, `${path}.page`, 'list view-all page', errors);
+  if (viewAll.label !== undefined) {
+    validateStringField(viewAll.label, `${path}.label`, true, errors);
   }
 }
 
