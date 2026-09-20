@@ -8,6 +8,7 @@
       import { renderRefreshError } from "./components/refresh-error.js";
       import { collectFullDiagnostics } from "./diagnostics.js";
       import { renderAgenticLoader } from "./components/agentic-loader.js";
+      import { pendingSourceNames } from "./source-store.js";
       import { startDashboardAppUpdates } from "./dashboard-data-updates.js";
       import { attachCliActions, setDeclaredCliActions } from "./components/cli-actions.js";
       import { applyTableQuerySafetyLimits, browserTableCapacityDecision, logTableCapacityDecision } from "./data/table-capacity.js";
@@ -315,15 +316,18 @@
         setOpen(copilotPanelOpen);
       };
 
+      /** @returns {boolean} */
+      const hasPendingOverviewSources = () => pendingSourceNames((name) => name.startsWith("overview-")).length > 0;
       /**
-       * @param {Record<string, import('./presenter.js').LogicalSourceInput>} sources
-       * @param {'ready' | 'loading' | 'cached' | 'stale'} [state]
-       * @param {boolean} [prepared]
+      * @param {Record<string, import('./presenter.js').LogicalSourceInput>} sources
+      * @param {'ready' | 'loading' | 'cached' | 'stale'} [state]
+      * @param {boolean} [prepared]
       * @param {(pageId: string, options: { signal: AbortSignal, onUpdate: (sources: Record<string, import('./presenter.js').LogicalSourceInput>) => void }) => Promise<Record<string, import('./presenter.js').LogicalSourceInput>>} [loadPageSources]
-       * @param {() => void} [retryRefresh]
-       */
+      * @param {() => void} [retryRefresh]
+      */
       const renderSources = (sources, state = "ready", prepared = false, loadPageSources, retryRefresh) => {
         const canExecuteCliActions = previewMode === "canvas";
+        const keepOverviewLoaderVisible = state === "loading" || (state === "ready" && hasPendingOverviewSources());
         renderedSources = sources;
         renderedSourcesPrepared = prepared;
         renderedPageSourceLoader = loadPageSources;
@@ -338,11 +342,11 @@
           sources,
           commitSha: document.querySelector('meta[name="dashboard-version"]')?.getAttribute("content"),
           prepared,
-          loading: state === "loading",
+          loading: keepOverviewLoaderVisible,
           loadPageSources,
           tableRowLimit,
         });
-        if (state === "loading") {
+        if (keepOverviewLoaderVisible) {
           dashboard.classList.add("dashboard-loading");
           dashboard.setAttribute("aria-busy", "true");
           const loader = renderAgenticLoader({
@@ -388,7 +392,7 @@
        * @param {() => void} [retryRefresh]
        */
       const renderAfterInitialLoading = (sources, state, prepared, loadPageSources, retryRefresh) => {
-        if (initialLoadingSettled || state === "loading") {
+        if (initialLoadingSettled || state === "loading" || (state === "ready" && hasPendingOverviewSources())) {
           renderSources(sources, state, prepared, loadPageSources, retryRefresh);
           return;
         }
