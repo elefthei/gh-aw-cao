@@ -180,9 +180,187 @@ describe('dashboard DOM provenance', () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(rendered.querySelector('[data-page-id="overview"]')).not.toBe(overviewBefore);
+    expect(rendered.querySelector('[data-page-id="overview"]')).toBe(overviewBefore);
     expect(rendered.querySelector('.factory-floor')).not.toBeNull();
     expect(rendered.querySelector('[data-view-id="overview-campaigns"]')).toBeNull();
+    disposeDashboard(rendered);
+  });
+
+  it('loads a page chunk before mounting its independently bound elements', async () => {
+    const document = /** @type {import('../../src/presenter.js').PresentationDocument} */ (/** @type {unknown} */ ({
+      languageVersion: '0.1.0',
+      dashboard: {
+        id: 'chunked-binding-dashboard',
+        title: 'Chunked binding dashboard',
+        pages: [{
+          id: 'overview',
+          kind: /** @type {'custom'} */ ('custom'),
+          title: 'Overview',
+          chunk: 'dashboard-pages/overview.json',
+          'independent-source-bindings': true
+        }]
+      }
+    }));
+    const loadPageSources = /** @type {NonNullable<Parameters<typeof renderDashboardView>[0]['loadPageSources']>} */ (
+      () => new Promise(() => {})
+    );
+    loadPageSources.prepare = async () => {
+      Object.assign(document.dashboard.pages[0], {
+        views: [{
+          id: 'overview-header',
+          title: 'Overview header',
+          data: {
+            sources: [
+              'overview-outcome-summary',
+              'overview-run-summary',
+              'overview-factory-status',
+              'overview-rhythm'
+            ]
+          },
+          mark: 'element',
+          element: 'factory-header'
+        }]
+      });
+    };
+
+    const rendered = renderDashboardView({ document, sources: {}, loadPageSources });
+
+    await vi.waitFor(() => {
+      expect(rendered.querySelector('.factory-intro')).not.toBeNull();
+    });
+    expect(rendered.querySelector('[data-page-id="overview"]')?.getAttribute('aria-busy')).not.toBe('true');
+    disposeDashboard(rendered);
+  });
+
+  it('does not mount or query a prepared page after its navigation lifetime ends', async () => {
+    const document = /** @type {import('../../src/presenter.js').PresentationDocument} */ (/** @type {unknown} */ ({
+      languageVersion: '0.1.0',
+      dashboard: {
+        id: 'cancelled-chunk-dashboard',
+        title: 'Cancelled chunk dashboard',
+        pages: [{
+          id: 'overview',
+          kind: 'custom',
+          title: 'Overview',
+          chunk: 'dashboard-pages/overview.json',
+          'independent-source-bindings': true
+        }]
+      }
+    }));
+    let finishPreparation = () => {};
+    const loadPageSources = vi.fn(
+      /** @type {NonNullable<Parameters<typeof renderDashboardView>[0]['loadPageSources']>} */ (
+        () => new Promise(() => {})
+      )
+    );
+    loadPageSources.prepare = () => new Promise((resolve) => {
+      finishPreparation = () => {
+        Object.assign(document.dashboard.pages[0], {
+          views: [{
+            id: 'overview-header',
+            data: {
+              sources: [
+                'overview-outcome-summary',
+                'overview-run-summary',
+                'overview-factory-status',
+                'overview-rhythm'
+              ]
+            },
+            mark: 'element',
+            element: 'factory-header'
+          }]
+        });
+        resolve();
+      };
+    });
+
+    const rendered = renderDashboardView({ document, sources: {}, loadPageSources });
+    disposeDashboard(rendered);
+    finishPreparation();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(loadPageSources).not.toHaveBeenCalled();
+    expect(rendered.querySelector('.factory-intro')).toBeNull();
+  });
+
+  it('waits for page sources when a page mixes bound elements with ordinary views', async () => {
+    const rendered = renderDashboardView({
+      document: {
+        languageVersion: '0.1.0',
+        dashboard: {
+          id: 'mixed-binding-dashboard',
+          title: 'Mixed binding dashboard',
+          pages: [{
+            id: 'overview',
+            kind: 'custom',
+            title: 'Overview',
+            views: [
+              {
+                id: 'overview-header',
+                title: 'Overview header',
+                data: { sources: ['overview-run-summary'] },
+                mark: 'element',
+                element: 'factory-header'
+              },
+              {
+                id: 'runs-table',
+                title: 'Runs',
+                data: { source: 'runs' },
+                mark: 'table',
+                encoding: { columns: [{ field: 'run' }] }
+              }
+            ]
+          }]
+        }
+      },
+      sources: {},
+      loadPageSources: () => new Promise(() => {})
+    });
+
+    await vi.waitFor(() => {
+      expect(rendered.querySelector('[data-page-id="overview"]')?.getAttribute('aria-busy')).toBe('true');
+    });
+    expect(rendered.querySelector('.factory-intro')).toBeNull();
+    disposeDashboard(rendered);
+  });
+
+  it('waits for section count sources that are not independently bound', async () => {
+    const rendered = renderDashboardView({
+      document: {
+        languageVersion: '0.1.0',
+        dashboard: {
+          id: 'section-count-dashboard',
+          title: 'Section count dashboard',
+          pages: [{
+            id: 'overview',
+            kind: 'custom',
+            title: 'Overview',
+            views: [{
+              id: 'overview-header',
+              title: 'Overview header',
+              data: { sources: ['overview-run-summary'] },
+              mark: 'element',
+              element: 'factory-header'
+            }],
+            sections: [{
+              id: 'overview-section',
+              title: 'Overview',
+              layout: 'full',
+              views: ['overview-header'],
+              'count-source': 'overview-count'
+            }]
+          }]
+        }
+      },
+      sources: {},
+      loadPageSources: () => new Promise(() => {})
+    });
+
+    await vi.waitFor(() => {
+      expect(rendered.querySelector('[data-page-id="overview"]')?.getAttribute('aria-busy')).toBe('true');
+    });
+    expect(rendered.querySelector('.factory-intro')).toBeNull();
     disposeDashboard(rendered);
   });
 
