@@ -1,6 +1,11 @@
 import { ingestDashboardSources } from '../ingest/coordinator.js';
 import { workflowSourcePath } from '../model/ids.js';
-import { readCollections } from '../storage/indexeddb.js';
+import {
+  CANONICAL_DATABASE_SCHEMA,
+  countCollections,
+  readCollections
+} from '../storage/indexeddb.js';
+import { dashboardQueryDefects, dashboardQueryIndex } from './declarative.js';
 import { createCanonicalQueries } from './index.js';
 
 const monotonicNow = () => globalThis.performance?.now() ?? Date.now();
@@ -46,6 +51,71 @@ function canonicalProjectionMetadata(sources, sourceName, projectionName, rowCou
     availability: rowCount > 0 ? 'available' : 'empty',
     completeness: metadata.completeness === 'unknown' ? 'complete' : metadata.completeness
   };
+}
+
+/**
+ * Executes simple whole-table counts with IndexedDB's native count operation.
+ * Queries with row transforms, grouping, joins, unions, or nullable count
+ * fields retain the general declarative execution path.
+ *
+ * @param {IDBFactory} indexedDB
+ * @param {Record<string, unknown>} logicalSources
+ * @param {unknown} definitions
+ * @param {Iterable<string>} requested
+ * @returns {Promise<Record<string, import('../../presenter.js').LogicalSourceInput>>}
+ */
+export async function queryNativeCountSources(indexedDB, logicalSources, definitions, requested) {
+  const index = dashboardQueryIndex(definitions);
+  const defects = dashboardQueryDefects(definitions);
+  const plans = [...requested].flatMap((name) => {
+    const definition = index.get(name);
+    if (!definition || defects.has(name)) return [];
+    const table = CANONICAL_DATABASE_SCHEMA[definition.from];
+    const values = definition.aggregate?.values;
+    if (!table
+        || typeof table.keyPath !== 'string'
+        || definition.union?.length
+        || definition.joins?.length
+        || definition.filter
+        || definition.compute?.length
+        || definition['temporal-series']
+        || definition.predict?.length
+        || definition.select?.length
+        || definition['order-by']?.length
+        || definition.limit !== undefined
+        || definition.aggregate?.by?.length
+        || !Array.isArray(values)
+        || values.length === 0
+        || values.some((value) => (
+          value.reducer !== 'count' || value.field !== table.keyPath || value.filter
+        ))) {
+      return [];
+    }
+    return [{ name, source: definition.from, values }];
+  });
+  const storeNames = [...new Set(plans.map((plan) => plan.source))];
+  if (storeNames.length === 0) return {};
+  const counts = await countCollections(
+    indexedDB,
+    /** @type {typeof import('../storage/indexeddb.js').DATABASE_STORES[number][]} */ (storeNames)
+  );
+  return Object.fromEntries(plans.map((plan) => {
+    const inputMetadata = projectionMetadata(logicalSources, plan.source, plan.source, true);
+    return [plan.name, {
+      source: plan.name,
+      rows: [Object.fromEntries(plan.values.map((value) => [value.as, counts[plan.source]]))],
+      metadata: {
+        'source-id': `${plan.name}-query`,
+        'source-kind': 'derived',
+        'as-of': inputMetadata['as-of'],
+        'retrieved-at': inputMetadata['retrieved-at'],
+        completeness: inputMetadata.completeness,
+        freshness: inputMetadata.freshness,
+        availability: 'available',
+        'query-name': plan.name
+      }
+    }];
+  }));
 }
 
 /**
@@ -110,6 +180,7 @@ function projectedRun(run, publishedRuns, workflowsById) {
   const workflow = workflowsById.get(run.workflowId) ?? {};
   return {
     ...(publishedRuns.get(runKey(run)) ?? {}),
+    id: run.id,
     organization: run.owner,
     repository: run.repository,
     workflow: run.workflowPath ?? workflow.path,
@@ -177,6 +248,7 @@ function repositoriesSource(repositories, sources) {
     source: 'repositories',
     rows: repositories.map((repository) => ({
       ...(publishedRepositories.get([repository.owner, repository.name].map(normalizedKey).join(':')) ?? {}),
+      id: repository.id,
       organization: repository.owner,
       repository: repository.name,
       'repository-name': repository.name,
@@ -195,6 +267,7 @@ function campaignsSource(campaigns, sources) {
   return {
     source: 'campaigns',
     rows: campaigns.map((campaignRecord) => ({
+      id: campaignRecord.id,
       campaign: campaignRecord.slug,
       'campaign-name': campaignRecord.name,
       'campaign-description': campaignRecord.description,
@@ -249,6 +322,7 @@ function workflowsSource(workflows, repositoriesById, sources) {
       ].map(normalizedKey).join(':'));
       return {
         ...(publishedWorkflow ?? {}),
+        id: workflow.id,
         organization: repository.owner,
         repository: repository.name,
         workflow: workflow.path,
@@ -305,6 +379,7 @@ function recordsSource(sourceName, records, runsById, sources) {
       return {
         ...(publishedRecords.get(normalizedKey(event.id)) ?? {}),
         ...definedFields({
+          id: event.id,
           organization: run.owner,
           repository: run.repository,
           workflow: run.workflowPath,

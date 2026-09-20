@@ -24,6 +24,7 @@ export const ENTITY_STORES = /** @type {const} */ ([
   'issues'
 ]);
 export const TRANSACTION_STORE = 'transactions';
+export const DATABASE_STORES = /** @type {const} */ ([...ENTITY_STORES, TRANSACTION_STORE]);
 export const CANONICAL_DATABASE_SCHEMA = /** @type {Record<
  * string, { keyPath: string, indexes: Record<string, string | string[]> }
  * >} */ ({
@@ -344,6 +345,37 @@ export async function readCollections(indexedDB, storeNames) {
       durationMs: monotonicNow() - startedAt
     });
     return Object.fromEntries(storeNames.map((storeName, index) => [storeName, records[index]]));
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * Counts multiple stores through one connection and one readonly transaction.
+ * @param {IDBFactory} indexedDB
+ * @param {readonly typeof DATABASE_STORES[number][]} storeNames
+ */
+export async function countCollections(indexedDB, storeNames) {
+  const startedAt = monotonicNow();
+  const database = await openCanonicalDatabase(indexedDB);
+  try {
+    const counts = storeNames.length === 0
+      ? []
+      : await (async () => {
+          const transaction = database.transaction([...storeNames]);
+          const done = transactionDone(transaction);
+          const values = await Promise.all(storeNames.map((storeName) =>
+            requestResult(transaction.objectStore(storeName).count())
+          ));
+          await done;
+          return values;
+        })();
+    debug('completed multi-store collection count', {
+      storeCount: storeNames.length,
+      requestCount: storeNames.length,
+      durationMs: monotonicNow() - startedAt
+    });
+    return Object.fromEntries(storeNames.map((storeName, index) => [storeName, counts[index]]));
   } finally {
     database.close();
   }
