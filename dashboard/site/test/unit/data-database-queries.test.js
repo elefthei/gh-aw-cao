@@ -10,10 +10,10 @@ import {
 } from '../../src/data/storage/indexeddb.js';
 import {
   loadDatabaseQuerySources,
-  queryCanonicalDatabaseDiagnostics,
   queryDatabaseSources,
   queryIndexedDatabaseSources
 } from '../../src/data/queries/database.js';
+import { processDataRequest } from '../../src/data-worker.js';
 import { createDashboardQueryBudget, executeDashboardQueries } from '../../src/data/queries/declarative.js';
 
 const loadCanonicalViewSources = loadDatabaseQuerySources;
@@ -27,6 +27,22 @@ const optimizationDashboardQueries = JSON.parse(
 const dashboardQueries = JSON.parse(
   readFileSync(`${process.cwd()}/dashboard.json`, 'utf8')
 ).dashboard.queries;
+
+/** @param {string} storeName @param {Record<string, unknown>} record */
+async function putCanonicalRecord(storeName, record) {
+  const database = await new Promise((resolve, reject) => {
+    const request = indexedDB.open(DATABASE_NAME);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  await new Promise((resolve, reject) => {
+    const transaction = database.transaction(storeName, 'readwrite');
+    transaction.objectStore(storeName).put(record);
+    transaction.oncomplete = () => resolve(undefined);
+    transaction.onerror = () => reject(transaction.error);
+  });
+  database.close();
+}
 const sources = {
   campaigns: {
     rows: [{
@@ -167,7 +183,9 @@ afterEach(() => {
 
 describe('canonical view sources', () => {
   it('summarizes canonical database diagnostics inside the query layer', async () => {
-    const diagnostics = await queryCanonicalDatabaseDiagnostics(indexedDB);
+    const diagnostics = /** @type {import('../../src/diagnostics.js').DatabaseDiagnostics} */ (await processDataRequest({
+      operation: 'query-canonical-database-diagnostics'
+    }));
 
     expect(diagnostics.schemaVersion).toBeGreaterThan(0);
     expect(diagnostics.counts).toEqual(expect.objectContaining({
@@ -183,6 +201,23 @@ describe('canonical view sources', () => {
       workflows: [],
       runs: []
     }));
+  });
+
+  it('finds canonical relationship failures through declarative database queries', async () => {
+    await processDataRequest({ operation: 'query-canonical-database-diagnostics' });
+    await putCanonicalRecord('workflows', {
+      id: 'workflow:orphan',
+      repositoryId: 'repository:missing'
+    });
+
+    const diagnostics = /** @type {import('../../src/diagnostics.js').DatabaseDiagnostics} */ (await processDataRequest({
+      operation: 'query-canonical-database-diagnostics'
+    }));
+
+    expect(diagnostics.counts.workflows).toBe(1);
+    expect(diagnostics.relationshipErrors).toEqual([
+      'workflow:orphan.repositoryId does not reference an existing repository'
+    ]);
   });
 
   it('matches declarative counts for every canonical database table', async () => {

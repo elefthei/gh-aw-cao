@@ -2,16 +2,12 @@ import { ingestDashboardSources } from '../ingest/coordinator.js';
 import databaseQueries from './database.json' with { type: 'json' };
 import {
   CANONICAL_DATABASE_SCHEMA,
-  DATABASE_VERSION,
-  ENTITY_STORES,
   countCollections,
   queryCollection,
   readCollections,
   readTransactions
 } from '../storage/indexeddb.js';
-import { relationshipErrors } from '../model/schema.js';
 import {
-  DASHBOARD_QUERY_LIMITS,
   dashboardQueryDefects,
   dashboardQueryIndex,
   executeDashboardQueries,
@@ -31,36 +27,6 @@ const DATABASE_TABLE_SOURCES = new Set([
   'transactions'
 ]);
 
-/**
- * Returns a bounded consistency summary without exposing canonical records to
- * the main thread.
- *
- * @param {IDBFactory} indexedDB
- */
-export async function queryCanonicalDatabaseDiagnostics(indexedDB) {
-  const records = await readCollections(indexedDB, ENTITY_STORES);
-  const counts = Object.fromEntries(
-    ENTITY_STORES.map((store) => [store, records[store].length])
-  );
-  const duplicateRecordIds = Object.fromEntries(ENTITY_STORES.map((store) => {
-    const seen = new Set();
-    const duplicates = new Set();
-    for (const record of records[store]) {
-      if (typeof record.id !== 'string') continue;
-      if (seen.has(record.id)) duplicates.add(record.id);
-      seen.add(record.id);
-    }
-    return [store, [...duplicates]];
-  }));
-  return {
-    schemaVersion: DATABASE_VERSION,
-    counts,
-    relationshipErrors: relationshipErrors(
-      /** @type {import('../model/schema.js').CanonicalBatch} */ (records)
-    ),
-    duplicateRecordIds
-  };
-}
 const HEALTH_DATABASE_SOURCES = [
   'repositories',
   'workflows',
@@ -129,24 +95,11 @@ function hasRows(source) {
 function executeDatabaseQuery(queryName, inputs, sources, metadataSource) {
   const definition = databaseQueryIndex.get(queryName);
   if (!definition) throw new Error(`Missing database query: ${queryName}`);
-  const primary = inputs[definition.from];
-  const chunkSize = DASHBOARD_QUERY_LIMITS['max-output-rows'];
-  const chunks = primary?.rows.length > chunkSize
-    ? Array.from(
-        { length: Math.ceil(primary.rows.length / chunkSize) },
-        (_, index) => primary.rows.slice(index * chunkSize, (index + 1) * chunkSize)
-      )
-    : [primary?.rows ?? []];
-  const results = chunks.map((rows) => executeDashboardQueries(
+  const result = executeDashboardQueries(
     [definition],
-    primary ? { ...inputs, [definition.from]: { ...primary, rows } } : inputs,
+    inputs,
     [queryName]
-  )[queryName]);
-  const failed = results.find((result) => result.metadata.availability === 'unavailable');
-  const result = failed ?? {
-    ...results[0],
-    rows: results.flatMap((source) => source.rows)
-  };
+  )[queryName];
   const unavailable = result.metadata.availability === 'unavailable';
   return /** @type {import('../../presenter.js').LogicalSourceInput} */ ({
     ...result,
@@ -371,16 +324,6 @@ export async function queryDatabaseSources(indexedDB, logicalSources, sourceName
       };
       continue;
     }
-    if (name === 'transactions') {
-      result.transactions = executeDatabaseQuery('transactions', {
-        $transactions: {
-          source: '$transactions',
-          rows: transactions,
-          metadata: queryMetadata(sources, 'transactions', 'transactions', true)
-        }
-      }, sources, 'transactions');
-      continue;
-    }
     if (RUN_RECORD_STORES.has(name)) {
       result[name] = executeRunRecordsQuery(name, collections[name] ?? [], collections.runs ?? [], sources);
       continue;
@@ -410,7 +353,7 @@ export async function queryDatabaseSources(indexedDB, logicalSources, sourceName
       `$${store}`,
       {
         source: `$${store}`,
-        rows: collections[store] ?? [],
+        rows: store === 'transactions' ? transactions : collections[store] ?? [],
         metadata: queryMetadata(sources, store, store, true)
       }
     ]));

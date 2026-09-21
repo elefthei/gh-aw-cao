@@ -24,7 +24,13 @@ describe('dashboard query architecture', () => {
     const workProject = read('src/components/work-project-view.js');
     const presentationQueryFixture = read('test/workflow-inventory-query.js');
     const databaseAccess = read('src/data/queries/database.js');
-    const databaseQueries = JSON.parse(read('src/data/queries/database.json'));
+    const databaseQueries = /** @type {Array<{
+     * name?: string,
+     * from?: string,
+     * stores?: string[],
+     * aggregate?: unknown,
+     * joins?: unknown[]
+     * }>} */ (JSON.parse(read('src/data/queries/database.json')));
     const dashboard = JSON.parse(read('dashboard.json')).dashboard;
     const optimizationDashboard = JSON.parse(read('../../optimization/dashboard.json')).dashboard;
 
@@ -115,6 +121,10 @@ describe('dashboard query architecture', () => {
   it('keeps canonical database reads out of the UI JavaScript layer', () => {
     const diagnostics = read('src/diagnostics.js');
     const configurationView = read('src/components/configuration-view.js');
+    const databaseQueries = /** @type {Array<{ name: string, from?: string, stores?: string[], aggregate?: unknown, joins?: unknown[] }>} */ (
+      JSON.parse(read('src/data/queries/database.json'))
+    );
+    const databaseQueryLayer = read('src/data/queries/database.js');
     const processor = read('src/data-processor.js');
     const worker = read('src/data-worker.js');
 
@@ -122,6 +132,14 @@ describe('dashboard query architecture', () => {
     expect(configurationView).not.toMatch(/data\/storage\/indexeddb|indexedDB|readCollection/);
     expect(processor).toContain("operation: 'query-canonical-database-diagnostics'");
     expect(worker).toContain("operation === 'query-canonical-database-diagnostics'");
-    expect(worker).toContain('queryCanonicalDatabaseDiagnostics(indexedDB)');
+    expect(worker).toContain('return collectCanonicalDatabaseDiagnostics()');
+    expect(databaseQueryLayer).not.toMatch(/diagnostic|relationshipErrors/);
+    expect(worker).toContain('relationshipErrors(');
+    expect(worker).toContain('readCollections(indexedDB, ENTITY_STORES)');
+    expect(databaseQueries.find(({ name }) => name === 'transactions')).toMatchObject({
+      from: '$transactions',
+      stores: ['transactions']
+    });
+    expect(databaseQueries.some(({ name }) => name.startsWith('database-diagnostics-'))).toBe(false);
   });
 });
