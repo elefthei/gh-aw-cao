@@ -26,6 +26,9 @@ describe('data-worker ingestion progress', () => {
         icon: 'download',
         detailsSubtitle: expect.stringContaining('local copy'),
         details: ['Preparing data... +0s'],
+        actions: [
+          { label: 'Cancel', operation: 'cancel-data-ingestion', placement: 'details', requestId: undefined }
+        ],
         duration: 0
       })
     });
