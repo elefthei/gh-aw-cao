@@ -11074,6 +11074,27 @@
               }
             },
             "layout": "full"
+          },
+          {
+            "id": "overview-campaigns",
+            "title": "Campaigns",
+            "intent": "Provide direct navigation to every registered campaign without requesting supporting metrics.",
+            "description": "Open a campaign to view its activity and insights.",
+            "data": {
+              "sources": [
+                "campaigns"
+              ]
+            },
+            "mark": "element",
+            "element": "link-button-list",
+            "config": {
+              "label-field": "campaign-name",
+              "link-field": "campaign-link",
+              "icon-field": "campaign-icon",
+              "fallback-icon": "goal",
+              "empty-message": "No campaigns are registered."
+            },
+            "layout": "full"
           }
         ]
       },
