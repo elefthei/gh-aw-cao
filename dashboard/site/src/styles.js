@@ -664,6 +664,7 @@ main.dashboard-prototype { width: 100%; min-height: 0; flex: 1; overflow-y: auto
 .horizontal-bar-chart-list { display: grid; gap: 6px; width: 100%; margin: 0; padding: 0; list-style: none; }
 .horizontal-bar-chart-row { min-width: 0; display: grid; grid-template-columns: minmax(120px, 52%) minmax(48px, 1fr) auto; align-items: center; gap: 8px; }
 .horizontal-bar-chart-label { overflow: hidden; color: var(--fg); font-size: .75rem; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.horizontal-bar-chart-label-text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .horizontal-bar-chart-track { height: 14px; overflow: hidden; border-radius: 3px; background: var(--canvas-subtle); }
 .horizontal-bar-chart-bar { display: block; width: var(--horizontal-bar-size); height: 100%; transform-origin: left center; background: var(--accent); }
 .horizontal-bar-chart-value { min-width: 4ch; color: var(--muted); font-size: .6875rem; font-variant-numeric: tabular-nums; }
@@ -2151,6 +2152,10 @@ footer { min-height: 44px; display: flex; flex: none; align-items: center; justi
   :root[data-navigation-direction="backward"]::view-transition-new(root) { z-index: 1; animation-name: dashboard-view-slide-in-left; animation-timing-function: cubic-bezier(.4, 0, .2, 1); }
   .source-refresh-error { align-items: flex-start; flex-direction: column; }
   .timeline-chart-axis span:not(:first-child):not(:last-child):nth-child(even) { display: none; }
+  .horizontal-bar-chart-row { grid-template-columns: minmax(0, 1fr) minmax(56px, 32%) auto; gap: 6px; }
+  /* Flip only the clipping container so mobile ellipses drop the prefix; the inner bdi preserves LTR path order. */
+  .horizontal-bar-chart-label { direction: rtl; text-align: left; }
+  .horizontal-bar-chart-label-text { display: inline; overflow: visible; direction: ltr; unicode-bidi: isolate; }
   :is(.mode-badge, .mode-indicator) .octicon { display: none; }
   .dashboard-root { --dashboard-mobile-page-padding-top: 16px; --dashboard-mobile-page-padding-inline: 14px; --dashboard-mobile-page-padding-bottom: 28px; height: auto; min-height: 100vh; overflow: visible; }
   .app-shell { height: auto; min-height: 100vh; display: block; overflow: visible; }
