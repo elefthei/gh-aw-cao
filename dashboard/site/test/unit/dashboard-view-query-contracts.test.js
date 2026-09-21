@@ -56,7 +56,32 @@ function sourceNamesOf(view) {
   return typeof configured.source === 'string' ? [configured.source] : [];
 }
 
+/**
+ * @param {unknown} value
+ * @returns {string[]}
+ */
+function declaredQueryReferences(value) {
+  if (!value || typeof value !== 'object') return [];
+  if (Array.isArray(value)) return value.flatMap(declaredQueryReferences);
+  const configured = /** @type {Record<string, unknown>} */ (value);
+  return Object.entries(configured).flatMap(([key, nested]) => {
+    if ((key === 'from' || key === 'source' || key === 'query') && typeof nested === 'string' && queryNames.has(nested)) {
+      return [nested];
+    }
+    if ((key === 'sources' || key === 'union') && Array.isArray(nested)) {
+      return nested.filter((name) => typeof name === 'string' && queryNames.has(name));
+    }
+    return declaredQueryReferences(nested);
+  });
+}
+
 describe('dashboard view query contracts', () => {
+  it('does not retain core experimental navigation sections', () => {
+    expect(dashboard.navigation.filter(
+      (/** @type {{ experimental?: boolean }} */ section) => section.experimental === true
+    )).toEqual([]);
+  });
+
   it('keeps assessment-sensitive high-cardinality views declaratively bounded', () => {
     const pagesById = new Map(dashboard.pages.map((/** @type {Record<string, unknown>} */ page) => [page.id, page]));
     const boundedViews = [
@@ -134,6 +159,26 @@ describe('dashboard view query contracts', () => {
     )));
 
     expect(unresolved).toEqual([]);
+  });
+
+  it('does not retain queries unused by dashboard content or another retained query', () => {
+    const retained = new Set(declaredQueryReferences({
+      ...dashboard,
+      queries: undefined
+    }));
+    const queryByName = new Map(queries.map((/** @type {{ name: string }} */ query) => [query.name, query]));
+    const pending = [...retained];
+
+    while (pending.length > 0) {
+      const query = queryByName.get(pending.pop());
+      for (const dependency of declaredQueryReferences(query)) {
+        if (retained.has(dependency)) continue;
+        retained.add(dependency);
+        pending.push(dependency);
+      }
+    }
+
+    expect([...queryNames].filter((name) => !retained.has(name))).toEqual([]);
   });
 
   it('materializes every declared view query through the production worker handler', () => {
