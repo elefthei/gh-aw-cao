@@ -7,8 +7,7 @@ import { getPrimerStyles } from './styles.js';
 import { octicon } from './octicons.js';
 import { renderDataStateMetrics } from './components/data-state.js';
 import { titleCase } from './components/count-formatters.js';
-import { formatMediumUtcDateTime, renderEmptyMessage } from './components/ui-primitives.js';
-import { renderAgenticLoader } from './components/agentic-loader.js';
+import { formatMediumUtcDateTime, renderEmptyMessage, renderSkeletonBars } from './components/ui-primitives.js';
 import { customViewAvailabilityMessage, renderCustomViewStateDetails, renderLayoutSectionChrome, renderPageSection, renderViewDisclosure } from './components/view-chrome.js';
 import { externalAnchorAttrs, findLink } from './components/link-content.js';
 import { elementHandlesEmptyRows, elementHandlesUnavailableSource, elementLoadsSourcesAsync, renderUiElement } from './components/ui-elements.js';
@@ -465,6 +464,7 @@ function queryParametersMatch(left, right) {
 function showPageSkeleton(page, routeTabs) {
   page.replaceChildren(...(routeTabs ? [routeTabs, renderPageSkeleton()] : [renderPageSkeleton()]));
   page.setAttribute('aria-busy', 'true');
+  page.setAttribute('aria-label', 'Loading view');
 }
 
 /**
@@ -652,6 +652,7 @@ function renderPageLoadingSkeleton(page) {
   const placeholder = renderPagePlaceholder(page);
   placeholder.removeAttribute('data-page-pending');
   placeholder.setAttribute('aria-busy', 'true');
+  placeholder.setAttribute('aria-label', 'Loading view');
   placeholder.append(renderPageSkeleton());
   return placeholder;
 }
@@ -660,11 +661,7 @@ function renderPageLoadingSkeleton(page) {
  * @returns {HTMLElement}
  */
 function renderPageSkeleton() {
-  return renderAgenticLoader({
-    className: 'dashboard-view-skeleton',
-    label: 'Loading view',
-    compact: true
-  });
+  return renderSkeletonBars('dashboard-view-skeleton');
 }
 
 /**
@@ -1193,6 +1190,7 @@ export function enableDashboardPageNavigation(root, dashboardTitle = '', renderP
             if (revision !== activationRevision || activePageId !== pageId || !currentPage.parentNode) return;
             currentPage.replaceChildren(renderEmptyMessage('Unable to load this page.', { role: 'alert' }));
             currentPage.removeAttribute('aria-busy');
+            currentPage.removeAttribute('aria-label');
           });
         } else {
           replacePage(rendered);
