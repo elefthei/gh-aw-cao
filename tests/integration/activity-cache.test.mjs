@@ -73,12 +73,16 @@ test("activity workflow caches gh-aw logs and their SQLite projection", async ()
   );
   assert.match(
     indexJob,
-    /Download agentic workflow logs\n\s+continue-on-error: true[\s\S]*?Ingest activity database/,
+    /Download agentic workflow logs[\s\S]*?Ingest activity database/,
   );
   assert.match(workflow, /REPORT_CONTROL_SETTINGS:[\s\S]*?bash "\$collector"/);
   assert.match(collector, /jq -r '\.allowed_repositories\[\]\?'/);
   assert.match(collector, /--repo "\$target_repository"/);
-  assert.match(collector, /--cached-logs "\$\{shard_prefix\}\*"/);
+  assert.match(collector, /--cached-jsonl "\$\{shard_prefix\}\*"/);
+  assert.doesNotMatch(
+    indexJob,
+    /Download agentic workflow logs\n\s+continue-on-error:/,
+  );
   assert.doesNotMatch(collector, /gh api|token-efficiency/);
   assert.doesNotMatch(workflow, /collect-token-efficiency\.sh/);
   assert.match(
