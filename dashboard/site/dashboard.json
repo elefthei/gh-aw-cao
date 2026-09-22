@@ -4030,18 +4030,19 @@
         ]
       },
       {
-        "name": "safe-output-items",
-        "intent": "Inspect safe-output items with their GitHub entity type and producing workflow run.",
-        "description": "Safe-output item events retain entity, action, repository, workflow, and run provenance.",
+        "name": "issue-safe-outputs",
+        "intent": "List retained GitHub issue safe outputs.",
+        "description": "Issue-only projection of retained safe-output items.",
         "from": "issues",
-        "union": [
-          "audits"
-        ],
         "filter": {
           "predicates": [
             {
               "field": "event-type",
               "equals": "safe_output.created"
+            },
+            {
+              "field": "is-pull-request",
+              "equals": false
             }
           ]
         },
@@ -4129,65 +4130,6 @@
         ]
       },
       {
-        "name": "issue-safe-outputs",
-        "intent": "List retained GitHub issue safe outputs.",
-        "description": "Issue-only projection of retained safe-output items.",
-        "from": "safe-output-items",
-        "filter": {
-          "predicates": [
-            {
-              "field": "is-pull-request",
-              "equals": false
-            }
-          ]
-        },
-        "select": [
-          {
-            "field": "observed-at"
-          },
-          {
-            "field": "github-entity-type"
-          },
-          {
-            "field": "is-pull-request"
-          },
-          {
-            "field": "safe-output-type"
-          },
-          {
-            "field": "event-summary"
-          },
-          {
-            "field": "entity-url"
-          },
-          {
-            "field": "organization"
-          },
-          {
-            "field": "repository"
-          },
-          {
-            "field": "workflow"
-          },
-          {
-            "field": "run"
-          },
-          {
-            "field": "run-link"
-          }
-        ],
-        "order-by": [
-          {
-            "field": "observed-at",
-            "direction": "desc"
-          },
-          {
-            "field": "entity-url",
-            "direction": "asc"
-          }
-        ]
-      },
-      {
         "name": "issue-repository-totals",
         "intent": "Rank the ten repositories with the most retained GitHub issue safe outputs.",
         "description": "Top repositories by retained issue safe-output count.",
@@ -4237,18 +4179,57 @@
         "name": "pull-requests",
         "intent": "List retained GitHub pull request safe outputs.",
         "description": "Pull-request-only projection of retained safe-output items.",
-        "from": "safe-output-items",
+        "from": "issues",
         "filter": {
           "predicates": [
+            {
+              "field": "event-type",
+              "equals": "safe_output.created"
+            },
             {
               "field": "is-pull-request",
               "equals": true
             }
           ]
         },
+        "joins": [
+          {
+            "source": "runs",
+            "type": "left",
+            "on": [
+              {
+                "left": "organization",
+                "right": "organization"
+              },
+              {
+                "left": "repository",
+                "right": "repository"
+              },
+              {
+                "left": "workflow",
+                "right": "workflow"
+              },
+              {
+                "left": "run",
+                "right": "run"
+              },
+              {
+                "left": "run-attempt",
+                "right": "run-attempt"
+              }
+            ],
+            "fields": [
+              {
+                "field": "run-link",
+                "as": "linked-run"
+              }
+            ]
+          }
+        ],
         "select": [
           {
-            "field": "observed-at"
+            "field": "event-timestamp",
+            "as": "observed-at"
           },
           {
             "field": "github-entity-type"
@@ -4263,7 +4244,8 @@
             "field": "event-summary"
           },
           {
-            "field": "entity-url"
+            "field": "correlation-id",
+            "as": "entity-url"
           },
           {
             "field": "organization"
@@ -4278,7 +4260,8 @@
             "field": "run"
           },
           {
-            "field": "run-link"
+            "field": "linked-run",
+            "as": "run-link"
           }
         ],
         "order-by": [
