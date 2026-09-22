@@ -15,7 +15,7 @@ function evaluate(input) {
   }));
 }
 
-test("token optimizer uses the one-shot operational-value contract", () => {
+test("token optimizer uses the one-shot operational-value contract", { skip: process.platform === "win32" }, () => {
   const fixtures = JSON.parse(readFileSync(
     join(root, ".github", "workflows", "graders", graderName.replace(/\.sh$/, ".fixtures.json")),
     "utf8",
@@ -29,20 +29,17 @@ test("token optimizer uses the one-shot operational-value contract", () => {
 test("optimization campaign installs the token optimizer contract", () => {
   const manifest = readFileSync(join(root, "optimization", "aw.yml"), "utf8");
 
+  assert.doesNotMatch(manifest, /^resources:/m);
+  assert.match(readFileSync(grader, "utf8"), /^#!\/usr\/bin\/env bash/m);
   assert.match(
-    manifest,
-    new RegExp(`source: \\.github/graders/${graderName.replaceAll(".", "\\.")}`),
+    readFileSync(join(root, "optimization", "collect-token-efficiency.sh"), "utf8"),
+    /^#!\/usr\/bin\/env bash/m,
   );
-  assert.match(
-    manifest,
-    new RegExp(`destination: \\.github/aw/optimization/graders/${graderName.replaceAll(".", "\\.")}`),
-  );
-  assert.match(manifest, /source: collect-token-efficiency\.sh/);
-  assert.match(manifest, /destination: \.github\/aw\/optimization\/collect-token-efficiency\.sh/);
 });
 
 test("token optimizer is review-only, assignment-scoped, and gated before inference", () => {
   const source = workflow("optimization-token-optimizer.md");
+  const compiled = workflow("optimization-token-optimizer.lock.yml");
   const policy = JSON.parse(readFileSync(join(root, ".github", "workflows", "cao.json"), "utf8"));
   const campaignPolicy = JSON.parse(readFileSync(join(root, "optimization", "cao.json"), "utf8"));
 
@@ -70,6 +67,8 @@ test("token optimizer is review-only, assignment-scoped, and gated before infere
   assert.match(source, /^      assignment_json:$/m);
   assert.doesNotMatch(source, /^      assignment_run_id:$/m);
   assert.match(source, /attributableRunIds: \(\$assignment\.attributableRunIds \+ \[\$optimizerRunId\] \| unique\)/);
+  assert.match(compiled, /cao_script=activity\/cao\.mjs/);
+  assert.doesNotMatch(compiled, /\.github\/aw\/activity\/cao\.mjs/);
   assert.equal(
     policy["control-plane"].campaigns.optimization.workers["token-optimizer"]["max-mode"],
     "review",
@@ -109,7 +108,7 @@ test("token intervention tracking is deterministic, read-only, and campaign-owne
   const tracker = readFileSync(
     join(root, ".github", "workflows", "optimization-token-intervention-tracker.yml"),
     "utf8",
-  );
+  ).replaceAll("\r\n", "\n");
   const manifest = readFileSync(join(root, "optimization", "aw.yml"), "utf8");
   const activityManifest = readFileSync(join(root, "activity", "aw.yml"), "utf8");
 
@@ -119,5 +118,9 @@ test("token intervention tracking is deterministic, read-only, and campaign-owne
   assert.match(tracker, /permissions:\n  actions: read\n  contents: read/);
   assert.doesNotMatch(tracker, /\bwrite\b|safe-outputs:|create-issue:|create-pull-request:/);
   assert.match(manifest, /optimization-token-intervention-tracker\.yml/);
-  assert.match(activityManifest, /token-intervention-lifecycle\.mjs/);
+  assert.doesNotMatch(activityManifest, /^resources:/m);
+  assert.match(
+    readFileSync(join(root, "activity", "token-intervention-lifecycle.mjs"), "utf8"),
+    /token_efficiency_lifecycle_observation/,
+  );
 });
