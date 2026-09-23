@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   DATABASE_NAME,
   DATABASE_VERSION,
+  maintainCanonicalDatabase,
   openCanonicalDatabase,
   publishDailyOverviewAggregates,
   readCollection,
@@ -102,6 +103,26 @@ describe('SQLite IndexedDB compatibility layer', { timeout: 30000 }, () => {
     await replaceCanonicalBatch(reopened, replacement);
     expect(await readCollection(reopened, 'audits')).toEqual([]);
     expect(readFileSync(filename, 'utf8').slice(0, 15)).toBe('SQLite format 3');
+  });
+
+  it('cascades retention eviction through SQLite indexes', async () => {
+    const indexedDB = installSqliteIndexedDB(temporaryDatabase());
+    const canonical = batch();
+    canonical.runs[0].observedAt = '2026-01-01T00:00:00Z';
+    canonical.audits = canonical.audits.map((record) => ({
+      ...record,
+      observedAt: '2026-09-09T00:00:00Z'
+    }));
+    await upsertCanonicalBatch(indexedDB, canonical);
+
+    await maintainCanonicalDatabase(indexedDB, {
+      now: Date.parse('2026-09-10T00:00:00Z'),
+      retentionWindowMs: 30 * 24 * 60 * 60 * 1000,
+      maxDatabaseBytes: Number.MAX_SAFE_INTEGER
+    });
+
+    expect(await readCollection(indexedDB, 'runs')).toEqual([]);
+    expect(await readCollection(indexedDB, 'audits')).toEqual([]);
   });
 
   it('publishes and range-reads daily overview aggregates through the compound generation/day index', async () => {
@@ -249,28 +270,30 @@ describe('SQLite IndexedDB compatibility layer', { timeout: 30000 }, () => {
       '--normalized-dir', normalizedDirectory,
       '--output', manifestPath
     ], { encoding: 'utf8' }));
-    const normalizedName = readdirSync(normalizedDirectory).find((name) => name.endsWith('.json'));
+    const normalizedName = readdirSync(normalizedDirectory).find((name) => name.endsWith('.jsonl'));
     if (!normalizedName) throw new Error('Normalized payload was not generated');
-    expect(normalizedName).toMatch(/^[a-f0-9]{64}-[a-f0-9]{16}\.json$/);
+    expect(normalizedName).toMatch(/^[a-f0-9]{64}-[a-f0-9]{16}\.jsonl$/);
+    expect(readdirSync(normalizedDirectory).some((name) => name.endsWith('.json'))).toBe(false);
     expect(hashes).toMatchObject({
       'dashboard.sqlite': expect.stringMatching(/^[a-f0-9]{64}$/),
       'shards/cached-v2.jsonl': expect.stringMatching(/^[a-f0-9]{64}$/),
       [`normalized/${normalizedName}`]: expect.stringMatching(/^[a-f0-9]{64}$/)
     });
-    expect(JSON.parse(readFileSync(join(normalizedDirectory, normalizedName), 'utf8'))).toMatchObject({
+    const [normalizedMetadata, ...normalizedRecords] = readFileSync(
+      join(normalizedDirectory, normalizedName),
+      'utf8'
+    ).trim().split('\n').map((line) => JSON.parse(line));
+    expect(normalizedMetadata).toMatchObject({
+      kind: 'metadata',
       schemaVersion: CANONICAL_SCHEMA_VERSION,
-      ingestionVersion: 2,
+      ingestionVersion: 3,
       sourceRecords: 3,
-      batch: {
-        repositories: expect.any(Array),
-        workflows: expect.any(Array),
-        runs: expect.any(Array),
-        domains: expect.any(Array),
-        tools: expect.any(Array),
-        audits: expect.any(Array),
-        issues: expect.any(Array)
-      }
+      phase: 'all',
+      records: normalizedRecords.length
     });
+    expect(normalizedRecords.every(({ kind, collection, record }) =>
+      kind === 'record' && typeof collection === 'string' && record && typeof record === 'object'
+    )).toBe(true);
 
     const audits = JSON.parse(execFileSync(process.execPath, [
       script,

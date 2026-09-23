@@ -30,9 +30,10 @@ trailing wildcard shard prefix instead of a single growing file. The wildcard sh
 directory itself is part of the shared activity cache, so `gh aw logs`
 recognizes previously discovered runs across job runs without re-seeding a
 snapshot. After a successful collection, `cao compact-jsonl` consolidates that
-repository's retained files into one shard without removing or reordering
-records, so observation precedence and dependent-record association are
-unchanged. Failed collections leave the prior files untouched. Shards containing only
+repository's retained files into bounded shards without removing or reordering
+records. The bounded files limit peak browser parsing memory while preserving
+observation precedence and dependent-record association. Failed collections
+leave the prior files untouched. Shards containing only
 out-of-range dated records are pruned by `gh aw logs --cache-before`. The
 ingestion step passes the shard directory to `cao ingest-jsonl --input-dir`,
 which tracks each compacted shard by content hash.
@@ -89,7 +90,9 @@ $RUNNER_TEMP/cao-activity/drain3_weights.json
 shards to their SHA-256 checksums. Run-information shards contain immutable
 agent/model identity and duration, firewall, MCP, operational-value, and audit
 priority aggregates. Every domain, tool, audit, and issue record includes its
-owning run identity. Empty phase shards are omitted, so the run and record directories can contain different
+owning run identity. Normalized phase shards use JSONL so browser consumers can
+stream and commit bounded record batches without retaining a complete file in
+memory. Empty phase shards are omitted, so the run and record directories can contain different
 filename stems. The dashboard imports all run-information shards before record
 shards so clients can query runs while detailed ingestion continues.
 Each phase filename retains the source shard's sortable prefix before its

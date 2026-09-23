@@ -8,6 +8,7 @@ import {
   ingestDashboardSources,
   ingestGhAwLogs,
   ingestNormalizedJson,
+  ingestNormalizedJsonl,
   ingestSqlExport
 } from '../../src/data/ingest/coordinator.js';
 import { createCanonicalQueries } from '../../src/data/queries/index.js';
@@ -79,6 +80,143 @@ beforeEach(async () => {
 });
 
 describe('canonical source ingestion and queries', () => {
+  it('streams normalized JSONL across chunk boundaries and skips published repeats', async () => {
+    await ingestDashboardSources(indexedDB, sources);
+    const inventoryRepository = (await readCanonicalBatch(indexedDB)).repositories[0];
+    const lines = [
+      {
+        kind: 'metadata',
+        schemaVersion: CANONICAL_SCHEMA_VERSION,
+        ingestionVersion: 3,
+        sourceRecords: 1,
+        phase: 'runs',
+        records: 1
+      },
+      {
+        kind: 'record',
+        collection: 'repositories',
+        record: {
+          ...inventoryRepository,
+          owner: 'overwritten-by-activity',
+          provenance: {
+            source: 'test',
+            sourceId: 'normalized-jsonl',
+            observedAt: '2026-09-09T05:00:00Z'
+          }
+        }
+      }
+    ].map((line) => JSON.stringify(line)).join('\n') + '\n';
+    async function* chunks() {
+      yield lines.slice(0, 17);
+      yield new TextEncoder().encode(lines.slice(17, 89));
+      yield lines.slice(89);
+    }
+    const options = {
+      payloadIdentity: 'f'.repeat(64),
+      payloadScope: 'https://example.test/gh-aw-logs-runs/shard.jsonl',
+      expectedPhase: /** @type {const} */ ('runs')
+    };
+
+    await expect(ingestNormalizedJsonl(indexedDB, chunks(), options)).resolves.toMatchObject({
+      updated: true,
+      committedRecords: 1
+    });
+
+    await expect(ingestNormalizedJsonl(indexedDB, chunks(), options)).resolves.toMatchObject({
+      updated: false,
+      skipped: true
+    });
+    expect((await readCanonicalBatch(indexedDB)).repositories).toEqual([
+      expect.objectContaining({
+        id: inventoryRepository.id,
+        owner: inventoryRepository.owner
+      })
+    ]);
+    expect(await readTransactions(indexedDB)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'ingest-normalized-jsonl',
+        payloadHash: options.payloadIdentity
+      })
+    ]));
+  });
+
+  it('streams normalized JSONL through multiple bounded writes', async () => {
+    const records = Array.from({ length: 251 }, (_, index) => ({
+      kind: 'record',
+      collection: 'repositories',
+      record: {
+        id: `repository:streamed-${index}`,
+        observedAt: '2026-09-09T05:00:00Z',
+        provenance: { source: 'test', sourceId: String(index), observedAt: '2026-09-09T05:00:00Z' }
+      }
+    }));
+    const lines = [
+      {
+        kind: 'metadata',
+        schemaVersion: CANONICAL_SCHEMA_VERSION,
+        ingestionVersion: 3,
+        sourceRecords: records.length,
+        phase: 'all',
+        records: records.length
+      },
+      ...records
+    ].map((line) => JSON.stringify(line)).join('\n');
+    /** @type {{ storedRecords: number, totalRecords: number }[]} */
+    const progress = [];
+    async function* chunks() { yield lines; }
+
+    const result = await ingestNormalizedJsonl(indexedDB, chunks(), {
+      payloadIdentity: 'e'.repeat(64),
+      payloadScope: 'https://example.test/gh-aw-logs-normalized/multiple.jsonl',
+      onWriteProgress: (value) => progress.push(value)
+    });
+
+    expect(result).toMatchObject({ committedBatches: 2, committedRecords: 251 });
+    expect(progress).toEqual([
+      { storedRecords: 250, totalRecords: 251 },
+      { storedRecords: 251, totalRecords: 251 }
+    ]);
+    expect((await readCanonicalBatch(indexedDB)).repositories).toHaveLength(251);
+  });
+
+  it('retries a truncated normalized stream without recording a receipt', async () => {
+    const metadata = {
+      kind: 'metadata',
+      schemaVersion: CANONICAL_SCHEMA_VERSION,
+      ingestionVersion: 3,
+      sourceRecords: 251,
+      phase: 'all',
+      records: 251
+    };
+    const records = Array.from({ length: 251 }, (_, index) => ({
+      kind: 'record',
+      collection: 'repositories',
+      record: {
+        id: `repository:retry-${index}`,
+        observedAt: '2026-09-09T05:00:00Z',
+        provenance: { source: 'test', sourceId: String(index), observedAt: '2026-09-09T05:00:00Z' }
+      }
+    }));
+    const options = {
+      payloadIdentity: 'd'.repeat(64),
+      payloadScope: 'https://example.test/gh-aw-logs-normalized/retry.jsonl'
+    };
+    /** @param {Record<string, unknown>[]} values */
+    const encode = (values) => values.map((value) => JSON.stringify(value)).join('\n');
+    async function* truncated() { yield encode([metadata, ...records.slice(0, 250)]); }
+    async function* complete() { yield encode([metadata, ...records]); }
+
+    await expect(ingestNormalizedJsonl(indexedDB, truncated(), options))
+      .rejects.toThrow('declared 251 records but contained 250');
+    expect(await readTransactions(indexedDB)).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ payloadHash: options.payloadIdentity })
+    ]));
+
+    await expect(ingestNormalizedJsonl(indexedDB, complete(), options))
+      .resolves.toMatchObject({ committedRecords: 251 });
+    expect((await readCanonicalBatch(indexedDB)).repositories).toHaveLength(251);
+  });
+
   it('imports pre-normalized JSON with a published identity and skips repeats', async () => {
     const payload = {
       schemaVersion: CANONICAL_SCHEMA_VERSION,

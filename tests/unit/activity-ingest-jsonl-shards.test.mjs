@@ -1,12 +1,23 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, cp, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, cp, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
+
+async function readNormalizedJsonl(filePath) {
+  const lines = (await readFile(filePath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+  const [metadata, ...records] = lines;
+  const batch = Object.fromEntries(
+    ['campaigns', 'repositories', 'workflows', 'runs', 'domains', 'tools', 'audits', 'issues']
+      .map((collection) => [collection, []])
+  );
+  for (const envelope of records) batch[envelope.collection].push(envelope.record);
+  return { ...metadata, batch };
+}
 
 async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), 'activity-ingest-jsonl-shards-'));
@@ -177,6 +188,44 @@ test('compact-jsonl consolidates exact-prefix shards without reordering observat
   assert.equal(await readFile(overlappingPrefixPath, 'utf8'), `${third}\n`);
 });
 
+test('compact-jsonl bounds retained shards without reordering observations', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'activity-compact-jsonl-bounded-'));
+  const prefix = 'githubnext-gh-aw-cao-logs-';
+  const records = Array.from({ length: 6 }, (_, index) =>
+    JSON.stringify({
+      schema_version: 2,
+      kind: 'run',
+      run: { run_id: index + 1, repository: 'githubnext/gh-aw-cao' },
+    })
+  );
+  await writeFile(path.join(root, `${prefix}1000-aaaa.jsonl`), `${records.slice(0, 3).join('\n')}\n`);
+  await writeFile(path.join(root, `${prefix}2000-bbbb.jsonl`), `${records.slice(3).join('\n')}\n`);
+  const maxBytes = Buffer.byteLength(`${records[0]}\n${records[1]}\n`);
+
+  const { stdout } = await execFileAsync(process.execPath, [
+    path.resolve('activity/cao.mjs'),
+    'compact-jsonl',
+    '--input-dir',
+    root,
+    '--group',
+    `githubnext/gh-aw-cao=${prefix}`,
+    '--max-bytes',
+    String(maxBytes),
+  ]);
+  const [group] = JSON.parse(stdout).groups;
+  const outputs = group.outputs.map((output) => path.basename(output));
+
+  assert.equal(outputs.length, 3);
+  assert.deepEqual(
+    (await Promise.all(outputs.map((name) => readFile(path.join(root, name), 'utf8'))))
+      .flatMap((content) => content.trim().split('\n')),
+    records,
+  );
+  for (const name of outputs) {
+    assert.ok((await stat(path.join(root, name))).size <= maxBytes);
+  }
+});
+
 test('ingest-jsonl injects every run shard before record shards', async () => {
   const { root, shardDirectory, databasePath } = await fixture();
   const runsDirectory = path.join(root, 'gh-aw-logs-runs');
@@ -324,7 +373,7 @@ test('hash-payloads excludes info-level audits from record shards', async () => 
   ]);
 
   const [recordShard] = await readdir(recordsDirectory);
-  const payload = JSON.parse(await readFile(path.join(recordsDirectory, recordShard), 'utf8'));
+  const payload = await readNormalizedJsonl(path.join(recordsDirectory, recordShard));
   const findings = payload.batch.audits.filter((audit) => audit.type === 'audit.finding');
   assert.deepEqual(findings.map((audit) => audit.summary), ['Actionable finding']);
 });
@@ -389,9 +438,11 @@ test('hash-payloads upgrades the legacy cached layout to phased shards', async (
   assert.equal(runs.length, 1);
   assert.deepEqual(runs, records);
   assert.equal(normalized.length, 1);
-  const runPayload = JSON.parse(await readFile(path.join(runsDirectory, runs[0]), 'utf8'));
-  const recordPayload = JSON.parse(await readFile(path.join(recordsDirectory, records[0]), 'utf8'));
-  const normalizedPayload = JSON.parse(await readFile(path.join(legacyNormalizedDirectory, normalized[0]), 'utf8'));
+  assert.ok([...runs, ...records, ...normalized].every((name) => name.endsWith('.jsonl')));
+  assert.ok(normalized.every((name) => !name.endsWith('.json')));
+  const runPayload = await readNormalizedJsonl(path.join(runsDirectory, runs[0]));
+  const recordPayload = await readNormalizedJsonl(path.join(recordsDirectory, records[0]));
+  const normalizedPayload = await readNormalizedJsonl(path.join(legacyNormalizedDirectory, normalized[0]));
   assert.equal(runPayload.phase, 'runs');
   assert.equal(recordPayload.phase, 'records');
   assert.ok(runPayload.batch.runs.length > 0);
