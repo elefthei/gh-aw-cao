@@ -11,6 +11,7 @@ import {
 } from "../dashboard-data-updates.js";
 import { configureSourceLoader, refreshSources as refreshBoundSources } from "../source-store.js";
 import { dashboardViewAliasName } from "./queries/view-payload-compiler.js";
+import { usesRemoteDataBackend } from "../remote-data-backend.js";
 
 /** @typedef {{ pageId?: string, viewId?: string, sourceIndex?: number, queryContext?: DashboardQueryContext }} BatchedSourceOptions */
 
@@ -223,6 +224,7 @@ export async function startDashboardData(options) {
   };
   configureSourceLoader(createBatchedSourceLoader(dashboardContext));
   const startAutomaticUpdates = () => {
+    if (usesRemoteDataBackend(document)) return;
     stopAutomaticDataUpdates = startAutomaticDashboardDataUpdates([
       new URL("./payload-hashes.json", sourceUrl).href,
       sourceUrl,
@@ -272,7 +274,13 @@ export async function startDashboardData(options) {
           changed,
         });
         refreshBoundSources();
-        render({}, "ready", loadPageSources);
+        if (usesRemoteDataBackend(document)) {
+          const dashboard = document.querySelector("#root > .dashboard-root");
+          dashboard?.classList.remove("dashboard-refreshing");
+          dashboard?.removeAttribute("aria-busy");
+        } else {
+          render({}, "ready", loadPageSources);
+        }
       },
       showStaleSources,
     );

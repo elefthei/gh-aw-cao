@@ -9,6 +9,7 @@
       import { attachCliActions, setDeclaredCliActions } from "./components/cli-actions.js";
       import { applyTableQuerySafetyLimits, browserTableCapacityDecision, logTableCapacityDecision } from "./data/table-capacity.js";
       import { startConsoleLogCapture } from "./console-log-capture.js";
+      import { usesRemoteDataBackend } from "./remote-data-backend.js";
       import {
         dashboardPageChunkPath,
         dashboardPageIsLoaded,
@@ -64,7 +65,9 @@
         setLoadingProgressState(document, state);
       });
       const cancelCommand = offerCancelCommand(document);
-      const stopDashboardAppUpdates = startDashboardAppUpdates();
+      const stopDashboardAppUpdates = usesRemoteDataBackend(document)
+        ? () => {}
+        : startDashboardAppUpdates();
       window.addEventListener("pagehide", (event) => {
         if (!event.persisted) {
           stopDashboardAppUpdates();
@@ -994,7 +997,9 @@
         cancelCommand.complete();
       } else {
         await ensureDashboardPageLoaded(initialDashboardPageId());
-        renderSources({}, "loading");
+        if (!document.querySelector('meta[name="dashboard-data-backend"][content="redis-http"]')) {
+          renderSources({}, "loading");
+        }
         const sourceUrl = new URL("./payload-hashes.json", window.location.href).href;
         try {
           await startDashboardData({
