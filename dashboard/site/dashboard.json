@@ -11980,7 +11980,6 @@
             "description": "Campaign health measures campaigns without current runtime errors; repository coverage measures registered repositories reached by successful worker execution.",
             "data": {
               "sources": [
-                "overview-outcome-summary",
                 "overview-factory-status",
                 "database-campaign-count",
                 "overview-healthy-campaign-count",
@@ -12035,7 +12034,6 @@
             "id": "overview-campaigns",
             "title": "Campaigns",
             "intent": "Provide direct navigation to every registered campaign, opening current problems first when attention is required.",
-            "description": "Campaigns needing attention open to Problems; other campaigns open to their campaign overview.",
             "data": {
               "sources": [
                 "overview-campaign-links"
