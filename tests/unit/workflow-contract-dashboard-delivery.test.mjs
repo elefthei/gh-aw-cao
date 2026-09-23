@@ -24,8 +24,7 @@ test("shared activity cache restores into activation and agent jobs", () => {
 
   for (const name of [
     "cao-evolution-failures-investigator.md",
-    "optimization-ai-credit-auditor.md",
-    "optimization-ai-credit-optimizer.md",
+    "optimization-token-auditor.md",
     "optimization-token-optimizer.md",
     "self-care-open-source-failures.md",
   ]) {
@@ -541,7 +540,7 @@ test("Dashboard inventory links multiline orchestrator worker lists", () => {
     )["control-plane"].campaigns;
     const registeredCampaignIds = Object.keys(policyCampaigns).sort();
     const expectedBundles = registeredCampaignIds.flatMap((campaignId) => {
-      const descriptorPath = join(root, campaignId === "optimization" ? ".experimental" : "", campaignId, "cao.json");
+      const descriptorPath = join(root, campaignId, "cao.json");
       if (!existsSync(descriptorPath)) {
         assert.equal(policyCampaigns[campaignId].workers, undefined, `${campaignId} workers require a campaign descriptor`);
         return [];
