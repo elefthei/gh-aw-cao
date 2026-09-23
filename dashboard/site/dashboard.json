@@ -3517,9 +3517,10 @@
           },
           {
             "field": "started-at",
-            "direction": "asc"
+            "direction": "desc"
           }
-        ]
+        ],
+        "limit": 250
       },
       {
         "name": "workflow-aic-totals",
@@ -12038,6 +12039,7 @@
             },
             "mark": "table",
             "controls": "interactive",
+            "lazy-list": true,
             "column-summaries": true,
             "empty-message": "No failed runs were observed in the selected horizon.",
             "layout": "full-view",

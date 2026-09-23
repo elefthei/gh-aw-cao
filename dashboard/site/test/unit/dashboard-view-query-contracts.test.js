@@ -99,6 +99,30 @@ describe('dashboard view query contracts', () => {
       expect(data?.limit, `${pageId}/${viewId} should bound rendered source rows`).toBe(limit);
       expect(data?.['order-by'], `${pageId}/${viewId} should choose deterministic retained rows`).toEqual(expect.any(Array));
     }
+
+    const topWorkflowRuns = queries.find((/** @type {{ name: string }} */ query) =>
+      query.name === 'top-workflow-runs'
+    );
+    expect(topWorkflowRuns).toMatchObject({ limit: 250 });
+    expect(topWorkflowRuns?.['order-by']).toContainEqual({ field: 'started-at', direction: 'desc' });
+  });
+
+  it('renders the failed-runs ledger as a bounded lazy table', () => {
+    const page = dashboard.pages.find((/** @type {Record<string, unknown>} */ candidate) =>
+      candidate.id === 'overview-failed-runs'
+    );
+
+    expect(viewsOf(page)).toMatchObject([{
+      id: 'overview-failed-runs-ledger',
+      data: {
+        source: 'failed-runs',
+        'order-by': [{ field: 'started-at', direction: 'desc' }]
+      },
+      mark: 'table',
+      controls: 'interactive',
+      'lazy-list': true,
+      layout: 'full-view'
+    }]);
   });
 
   it('keeps campaign run navigation first and failure views scoped to dispatches', () => {
