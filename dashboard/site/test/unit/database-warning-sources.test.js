@@ -136,7 +136,12 @@ describe('database warning source queries', () => {
       'finding-summary': 'Prompt injection detected'
     }));
     expect(sources.findings.metadata.availability).not.toBe('unavailable');
-    for (const name of Object.keys(sources).filter((name) => name !== 'findings')) {
+    // `outcomes` is derived in JavaScript from the `issues` canonical source
+    // (like `findings` is derived from `audits`), so it is expected to be
+    // populated here too rather than staying empty.
+    expect(sources.outcomes.rows).toHaveLength(1);
+    expect(sources.outcomes.metadata.availability).not.toBe('unavailable');
+    for (const name of Object.keys(sources).filter((name) => name !== 'findings' && name !== 'outcomes')) {
       expect(sources[name].rows).toEqual([]);
       expect(sources[name].metadata.availability).toBe('empty');
     }
