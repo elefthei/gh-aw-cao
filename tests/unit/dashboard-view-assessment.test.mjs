@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import dashboardViewsConfig from "../playwright/configs/dashboard-views.config.mjs";
 import {
   dashboardAssessmentPageBudgetMs,
   dashboardAssessmentStartupBudgetMs,
@@ -75,6 +76,10 @@ test("grows the assessment timeout with the number of selected views", () => {
   );
   assert.equal(dashboardAssessmentTimeout(75), maximumDashboardAssessmentTimeoutMs);
   assert.equal(dashboardAssessmentTimeout(10_000), maximumDashboardAssessmentTimeoutMs);
+});
+
+test("configures Playwright with the bounded assessment timeout", () => {
+  assert.equal(dashboardViewsConfig.timeout, maximumDashboardAssessmentTimeoutMs);
 });
 
 test("ignores request aborts caused by closing an assessed page", () => {
