@@ -12359,13 +12359,13 @@
       {
         "pages": [
           "overview",
-          "campaigns",
           "configuration"
         ]
       },
       {
         "label": "Data",
         "pages": [
+          "campaigns",
           "maintenance",
           "repositories",
           "workflows",
