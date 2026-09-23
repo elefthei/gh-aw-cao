@@ -2558,7 +2558,7 @@ describe('presenter built-in and custom pages', () => {
           source: 'findings',
           rows: [
             {
-              finding: 'finding-1',
+              code: 'finding-1',
               organization: 'github',
               repository: 'gh-aw-cao',
               'observed-at': '2026-08-29T12:00:00Z',
@@ -2572,7 +2572,7 @@ describe('presenter built-in and custom pages', () => {
               }
             },
             {
-              finding: 'finding-2',
+              code: 'finding-2',
               organization: 'github',
               repository: 'other-repo',
               'observed-at': '2026-08-29T13:00:00Z',
@@ -2586,7 +2586,7 @@ describe('presenter built-in and custom pages', () => {
               }
             },
             {
-              finding: 'finding-3',
+              code: 'finding-3',
               organization: 'github',
               repository: 'gh-aw-cao',
               'observed-at': '2026-08-30T01:00:00Z',
