@@ -12220,13 +12220,13 @@
         "pages": [
           "overview",
           "campaigns",
-          "repositories",
           "configuration"
         ]
       },
       {
         "label": "Data",
         "pages": [
+          "repositories",
           "workflows",
           "runs",
           "issues",

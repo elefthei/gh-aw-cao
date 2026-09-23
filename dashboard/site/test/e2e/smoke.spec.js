@@ -1360,10 +1360,10 @@ test('clean navigation preserves the Overview decision hierarchy across desktop 
 
   const cleanNavigation = page.locator('.primary-nav > [data-nav-page-id]');
   const data = page.locator('.nav-section').first();
-  await expect(cleanNavigation).toHaveText(['Overview', 'Campaigns', 'Repositories', 'Settings']);
+  await expect(cleanNavigation).toHaveText(['Overview', 'Campaigns', 'Settings']);
   await expect(data.locator('summary')).toHaveText('Data');
   await data.locator('summary').click();
-  await expect(data.getByRole('link')).toHaveText(['Workflows', 'Runs', 'Issues', 'Models & Agents', 'Firewall', 'MCPs']);
+  await expect(data.getByRole('link')).toHaveText(['Repositories', 'Workflows', 'Runs', 'Issues', 'Models & Agents', 'Firewall', 'MCPs']);
   await expect(page.locator('.nav-section').filter({ hasText: 'Experimental' })).toHaveCount(0);
   await expect(cleanNavigation.first().locator('.octicon-home')).toBeVisible();
   await expect(page.locator('.account-menu')).toHaveCount(0);
@@ -2512,8 +2512,10 @@ test('DLS-PAGE-014 DLS-PAGE-015 built-in campaigns page renders value, inventory
   expect(await mobileCampaignLinks.first().evaluate((link) => {
     return link.lastElementChild?.classList.contains('tab-trailing-icon') === true;
   })).toBe(true);
-  await mobileCampaignLinks.first().focus();
-  await expect(mobileCampaignLinks.first()).toHaveCSS('outline-offset', '-3px');
+  await expect.poll(() => mobileCampaignLinks.first().evaluate((link) => {
+    link.focus();
+    return getComputedStyle(link).outlineOffset;
+  })).toBe('-3px');
   const mobileLinkBoxes = await mobileCampaignLinks.evaluateAll((links) => links.map((link) => {
     const box = link.getBoundingClientRect();
     return { height: box.height, top: box.top };
