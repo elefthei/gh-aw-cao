@@ -458,6 +458,13 @@ describe('dashboard document validation', () => {
       controls: 'interactive',
       'lazy-list': true,
       'column-summaries': true,
+      'card-drill': {
+        type: 'query',
+        page: 'firewall-domain-workflows',
+        query: 'firewall-domain-workflows',
+        'title-field': 'domain',
+        arguments: [{ name: 'domain', field: 'domain' }]
+      },
       layout: 'full-view',
       data: {
         source: 'firewall-domain-totals',
