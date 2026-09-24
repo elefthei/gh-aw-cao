@@ -785,7 +785,7 @@ describe('presenter built-in and custom pages', () => {
   });
 
 
-  it('renders transaction entries as one full-view interactive lazy table', async () => {
+  it('renders indexing status, size trend, and transaction ingestion rate', async () => {
     const metadata = {
       'source-id': 'transactions-fixture',
       'source-kind': 'fixture',
@@ -816,6 +816,7 @@ describe('presenter built-in and custom pages', () => {
             duplicateRawRunObservations: 1,
             duplicateAgenticRunObservations: 2,
             unenrichedRuns: 3,
+            'activity-status': 'success',
             error: ''
           }],
           metadata
@@ -825,12 +826,12 @@ describe('presenter built-in and custom pages', () => {
 
     document.body.append(rendered);
     try {
-      window.location.hash = '#page-transactions';
-      await vi.waitFor(() => expect(rendered.querySelector('[data-page-id="transactions"]')?.hasAttribute('data-page-pending')).toBe(false));
-      const page = rendered.querySelector('[data-page-id="transactions"]');
-      expect(page?.querySelectorAll('[data-view-layout="full-view"]')).toHaveLength(1);
-      expect(page?.querySelectorAll('[data-view-id]')).toHaveLength(1);
-      expect(page?.querySelector('.line-chart-series')).toBeNull();
+      window.location.hash = '#page-indexing';
+      await vi.waitFor(() => expect(rendered.querySelector('[data-page-id="indexing"]')?.hasAttribute('data-page-pending')).toBe(false));
+      const page = rendered.querySelector('[data-page-id="indexing"]');
+      expect(page?.querySelectorAll('[data-view-id]')).toHaveLength(3);
+      expect(page?.querySelectorAll('[data-chart-widget="bar"]')).toHaveLength(2);
+      expect(page?.textContent).toContain('success');
       expect(page?.textContent).not.toContain('Local database');
       expect(page?.querySelector('[data-lazy-list]')).not.toBeNull();
       expect(page?.querySelector('input[type="search"]')).not.toBeNull();
