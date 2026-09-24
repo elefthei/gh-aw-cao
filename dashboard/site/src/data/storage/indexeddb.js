@@ -300,9 +300,10 @@ export function openCanonicalDatabase(indexedDB) {
  *
  * @param {IDBFactory} indexedDB
  * @param {import('../model/schema.js').CanonicalBatch} batch
- * @param {{ batchSize?: number, validateRelationships?: boolean, onBatchCommitted?: (progress: { committedBatches: number, committedRecords: number }) => void | Promise<void> }} [options]
+ * @param {{ batchSize?: number, validateRelationships?: boolean, signal?: AbortSignal, onBatchCommitted?: (progress: { committedBatches: number, committedRecords: number }) => void | Promise<void> }} [options]
  */
 export async function upsertCanonicalBatch(indexedDB, batch, options = {}) {
+  options.signal?.throwIfAborted();
   if (options.validateRelationships !== false) {
     const errors = relationshipErrors(batch);
     if (errors.length > 0) {
@@ -321,8 +322,10 @@ export async function upsertCanonicalBatch(indexedDB, batch, options = {}) {
     let committedRecords = 0;
     let committedBatches = 0;
     for (const storeName of ENTITY_STORES) {
+      options.signal?.throwIfAborted();
       const records = batch[storeName];
       for (let offset = 0; offset < records.length; offset += batchSize) {
+        options.signal?.throwIfAborted();
         const boundedRecords = records.slice(offset, offset + batchSize);
         const transaction = readwriteTransaction(database, storeName);
         const done = transactionDone(transaction);
@@ -353,7 +356,7 @@ function estimatedRecordBytes(record) {
  * never materializes the canonical database or its large linked-record stores.
  *
  * @param {IDBFactory} indexedDB
- * @param {{ now?: number, retentionWindowMs?: number, retentionWindowMsByStore?: Record<string, number>, maxDatabaseBytes: number, usageBytes?: number | null }} options
+ * @param {{ now?: number, retentionWindowMs?: number, retentionWindowMsByStore?: Record<string, number>, maxDatabaseBytes: number, usageBytes?: number | null, reconcileRelationships?: boolean, preserveEntityIds?: { repositories?: string[], workflows?: string[] } }} options
  */
 export async function maintainCanonicalDatabase(indexedDB, options) {
     const now = options.now ?? Date.now();
@@ -363,12 +366,23 @@ export async function maintainCanonicalDatabase(indexedDB, options) {
     const targetBytes = Math.floor(Math.max(0, options.maxDatabaseBytes) * 0.75);
     let estimatedBytes = 0;
     let deletedRecords = 0;
+    let retainedRecords = 0;
     /** @type {{ id: string, timestamp: number, bytes: number }[]} */
     const runs = [];
     /** @type {string[]} */
     const expiredRunIds = [];
     /** @type {Map<string, number>} */
     const linkedBytesByRun = new Map();
+    /** @type {Map<string, number>} */
+    const linkedRecordsByRun = new Map();
+    const retainedRunIds = new Set();
+    const campaignIds = new Set();
+    const repositoryIds = new Set();
+    /** @type {Map<string, string>} */
+    const workflowRepositories = new Map();
+    const validRunIds = new Set();
+    const referencedWorkflowIds = new Set();
+    const referencedRepositoryIds = new Set();
     const database = await openCanonicalDatabase(indexedDB);
     try {
       for (const storeName of ENTITY_STORES) {
@@ -377,6 +391,41 @@ export async function maintainCanonicalDatabase(indexedDB, options) {
         const store = transaction.objectStore(storeName);
         /** @param {Record<string, unknown>} record @param {() => void} remove */
         const visit = (record, remove) => {
+          const id = String(record.id);
+          if (options.reconcileRelationships) {
+            if (storeName === 'campaigns') {
+              campaignIds.add(id);
+            } else if (storeName === 'repositories') {
+              repositoryIds.add(id);
+            } else if (storeName === 'workflows') {
+              const repositoryId = String(record.repositoryId);
+              const campaignId = record.campaignId === undefined || record.campaignId === null
+                ? null
+                : String(record.campaignId);
+              if (!repositoryIds.has(repositoryId) || (campaignId !== null && !campaignIds.has(campaignId))) {
+                remove();
+                deletedRecords += 1;
+                return;
+              }
+              workflowRepositories.set(id, repositoryId);
+            } else if (storeName === 'runs') {
+              const repositoryId = String(record.repositoryId);
+              const workflowId = String(record.workflowId);
+              if (!repositoryIds.has(repositoryId) || workflowRepositories.get(workflowId) !== repositoryId) {
+                expiredRunIds.push(id);
+                return;
+              }
+              validRunIds.add(id);
+              referencedWorkflowIds.add(workflowId);
+              referencedRepositoryIds.add(repositoryId);
+            } else if (RUN_LINKED_STORES.includes(
+              /** @type {typeof RUN_LINKED_STORES[number]} */ (storeName)
+            ) && !validRunIds.has(String(record.runId))) {
+              remove();
+              deletedRecords += 1;
+              return;
+            }
+          }
           const configuredWindow = options.retentionWindowMsByStore?.[storeName];
           const windowMs = Number.isFinite(configuredWindow)
             ? Math.max(0, Number(configuredWindow))
@@ -394,7 +443,9 @@ export async function maintainCanonicalDatabase(indexedDB, options) {
           }
           const bytes = estimatedRecordBytes(record);
           estimatedBytes += bytes;
+          retainedRecords += 1;
           if (storeName === 'runs') {
+            retainedRunIds.add(id);
             runs.push({
               id: String(record.id),
               timestamp: timestamp ?? Number.NEGATIVE_INFINITY,
@@ -403,6 +454,7 @@ export async function maintainCanonicalDatabase(indexedDB, options) {
           } else if (RUN_LINKED_STORES.includes(/** @type {typeof RUN_LINKED_STORES[number]} */ (storeName))) {
             const runId = String(record.runId);
             linkedBytesByRun.set(runId, (linkedBytesByRun.get(runId) ?? 0) + bytes);
+            linkedRecordsByRun.set(runId, (linkedRecordsByRun.get(runId) ?? 0) + 1);
           }
         };
         if (typeof store.openCursor !== 'function') {
@@ -427,8 +479,57 @@ export async function maintainCanonicalDatabase(indexedDB, options) {
         await done;
       }
 
+      if (options.reconcileRelationships) {
+        const preservedWorkflows = new Set(options.preserveEntityIds?.workflows ?? []);
+        const survivingWorkflows = new Set([...referencedWorkflowIds, ...preservedWorkflows]);
+        for (const workflowId of survivingWorkflows) {
+          const repositoryId = workflowRepositories.get(workflowId);
+          if (repositoryId) referencedRepositoryIds.add(repositoryId);
+        }
+        const parentStores = [
+          ['workflows', survivingWorkflows],
+          ['repositories', new Set([
+            ...referencedRepositoryIds,
+            ...(options.preserveEntityIds?.repositories ?? [])
+          ])]
+        ];
+        for (const [storeName, retainedIds] of parentStores) {
+          const transaction = readwriteTransaction(database, /** @type {string} */ (storeName));
+          const done = transactionDone(transaction);
+          const store = transaction.objectStore(/** @type {string} */ (storeName));
+          /** @param {IDBValidKey} id @param {() => void} remove */
+          const removeUnreferenced = (id, remove) => {
+            if (/** @type {Set<string>} */ (retainedIds).has(String(id))) return;
+            remove();
+            deletedRecords += 1;
+            retainedRecords -= 1;
+          };
+          if (typeof store.openCursor !== 'function') {
+            for (const record of await requestResult(store.getAll())) {
+              removeUnreferenced(record.id, () => store.delete(record.id));
+            }
+          } else {
+            await new Promise((resolve, reject) => {
+              const request = store.openCursor();
+              request.onerror = () => reject(request.error ?? new Error('IndexedDB cursor failed'));
+              request.onsuccess = () => {
+                const cursor = request.result;
+                if (!cursor) {
+                  resolve(undefined);
+                  return;
+                }
+                removeUnreferenced(cursor.primaryKey, () => cursor.delete());
+                cursor.continue();
+              };
+            });
+          }
+          await done;
+        }
+      }
+
       for (const runId of expiredRunIds) {
         estimatedBytes -= linkedBytesByRun.get(runId) ?? 0;
+        retainedRecords -= linkedRecordsByRun.get(runId) ?? 0;
       }
       const usageTarget = Number.isFinite(options.usageBytes)
         && Number(options.usageBytes) > options.maxDatabaseBytes
@@ -442,7 +543,11 @@ export async function maintainCanonicalDatabase(indexedDB, options) {
           if (estimatedBytes <= effectiveTarget) break;
           evictedRunIds.push(run.id);
           estimatedBytes -= run.bytes + (linkedBytesByRun.get(run.id) ?? 0);
+          retainedRecords -= 1 + (linkedRecordsByRun.get(run.id) ?? 0);
         }
+      }
+      for (const runId of expiredRunIds) {
+        if (retainedRunIds.has(runId)) retainedRecords -= 1;
       }
 
       for (let offset = 0; offset < evictedRunIds.length; offset += DEFAULT_WRITE_BATCH_SIZE) {
@@ -497,7 +602,7 @@ export async function maintainCanonicalDatabase(indexedDB, options) {
         }
         await done;
       }
-      return { deletedRecords, estimatedBytes };
+      return { deletedRecords, estimatedBytes, retainedRecords };
     } finally {
       database.close();
     }
