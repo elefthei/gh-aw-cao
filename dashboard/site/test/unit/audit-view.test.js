@@ -24,7 +24,8 @@ describe('Audit dashboard view', () => {
     expect(insights.views.map((/** @type {{ id: string }} */ view) => view.id)).toEqual([
       'campaign-insights-navigation',
       'campaign-operational-grader-history',
-      'campaign-audit-event-summary-buckets'
+      'campaign-audit-event-summary-buckets',
+      'campaign-audit-event-table'
     ]);
     expect(insights.views[0].data).toMatchObject({
       sources: [
@@ -44,10 +45,11 @@ describe('Audit dashboard view', () => {
       element: 'measure-history'
     });
     expect(insights.views.slice(2).map((/** @type {{ data: Record<string, string> }} */ view) => view.data)).toEqual([
+      expect.objectContaining({ source: 'audit-event-summary-buckets', 'route-field': 'campaign' }),
       expect.objectContaining({ source: 'audit-event-summary-buckets', 'route-field': 'campaign' })
     ]);
     expect(insights.views.filter((/** @type {{ mark: string }} */ view) => view.mark !== 'element')
-      .map((/** @type {{ mark: string }} */ view) => view.mark)).toEqual(['chart']);
+      .map((/** @type {{ mark: string }} */ view) => view.mark)).toEqual(['chart', 'list']);
     expect(insights.views[2]).toMatchObject({
       title: 'Severity audit events',
       chart: 'horizontal-bar',
