@@ -26,7 +26,7 @@ import (
 	"github.com/githubnext/gh-aw-cao/server/internal/telemetry"
 )
 
-var collections = []string{"campaigns", "repositories", "workflows", "runs", "domains", "tools", "audits", "issues"}
+var collections = []string{"campaigns", "repositories", "workflows", "runs", "domains", "tools", "audits", "issues", "operationalValues"}
 
 const projectionBatchSize = 25_000
 
@@ -354,7 +354,7 @@ func projectSources(canonical map[string][]model.Row, inventory map[string]model
 		result, _, _, err := query.ExecuteDefinition(definition, available, query.MaxOperations)
 		return result, err
 	}
-	for _, name := range []string{"campaigns", "repositories", "workflows", "runs"} {
+	for _, name := range []string{"campaigns", "repositories", "workflows", "runs", "operational-values"} {
 		definition, ok := index[name]
 		if !ok {
 			continue
@@ -364,7 +364,11 @@ func projectSources(canonical map[string][]model.Row, inventory map[string]model
 		if err != nil {
 			return nil, fmt.Errorf("project %s: %w", name, err)
 		}
-		sources[name] = mergeLogical(sources[name], result)
+		if name == "operational-values" {
+			sources[name] = result
+		} else {
+			sources[name] = mergeLogical(sources[name], result)
+		}
 	}
 	runRecords, ok := index["run-records"]
 	if ok {
@@ -515,15 +519,16 @@ func mergeLogical(left, right model.Source) model.Source {
 
 func logicalRowKey(sourceName string, row model.Row) string {
 	fields := map[string][]string{
-		"campaigns":    {"campaign"},
-		"repositories": {"organization", "repository"},
-		"workflows":    {"organization", "repository", "workflow"},
-		"runs":         {"organization", "repository", "workflow", "run"},
-		"domains":      {"event"},
-		"tools":        {"event"},
-		"audits":       {"event"},
-		"issues":       {"event"},
-		"outcomes":     {"safe-output"},
+		"campaigns":         {"campaign"},
+		"repositories":      {"organization", "repository"},
+		"workflows":         {"organization", "repository", "workflow"},
+		"runs":              {"organization", "repository", "workflow", "run"},
+		"domains":           {"event"},
+		"tools":             {"event"},
+		"audits":            {"event"},
+		"issues":            {"event"},
+		"operationalValues": {"repository", "valueId", "timestamp"},
+		"outcomes":          {"safe-output"},
 	}[sourceName]
 	for _, fallback := range [][]string{fields, {"id"}} {
 		if len(fallback) == 0 {
@@ -621,6 +626,9 @@ func relationshipErrors(canonical map[string][]model.Row) []string {
 		for _, row := range canonical[collection] {
 			require(row, "runId", "runs", "run")
 		}
+	}
+	for _, row := range canonical["operationalValues"] {
+		require(row, "repositoryId", "repositories", "repository")
 	}
 	sort.Strings(result)
 	return result
