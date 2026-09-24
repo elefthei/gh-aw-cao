@@ -26,7 +26,11 @@ import (
 	"github.com/githubnext/gh-aw-cao/server/internal/telemetry"
 )
 
-var collections = []string{"campaigns", "repositories", "workflows", "runs", "domains", "tools", "audits", "issues", "operationalValues"}
+var collections = []string{
+	"campaigns", "repositories", "workflows", "runs",
+	"jobs", "sessions", "events",
+	"domains", "tools", "audits", "issues", "operationalValues",
+}
 
 const projectionBatchSize = 25_000
 
@@ -42,6 +46,7 @@ type Result struct {
 
 type Options struct {
 	DatabaseQueriesPath string
+	Force               bool
 }
 
 type Manifest map[string]string
@@ -151,7 +156,7 @@ func Run(ctx context.Context, store *redisx.Store, directory string, options Opt
 	if err != nil {
 		return Result{}, fmt.Errorf("read active Redis generation: %w", err)
 	}
-	if active.Generation != "" && active.DataRevision == dataRevision {
+	if !options.Force && active.Generation != "" && active.DataRevision == dataRevision {
 		ingestLog.Printf("reusing active generation revision=%d sources=%d", active.Revision, len(active.Counts))
 		evaluatedAt := active.EvaluatedAt
 		if evaluatedAt.IsZero() {
@@ -186,6 +191,10 @@ func Run(ctx context.Context, store *redisx.Store, directory string, options Opt
 		return Result{}, err
 	}
 	ingestLog.Printf("projected logical sources count=%d", len(sources))
+	diagnostics := buildDiagnostics(canonical)
+	if err := validateDiagnostics(diagnostics); err != nil {
+		return Result{}, err
+	}
 	generation := time.Now().UTC().Format("20060102T150405.000000000Z") + "-" + dataRevision[len(dataRevision)-12:]
 	counts := map[string]int{}
 	for _, name := range sortedSourceNames(sources) {
@@ -204,7 +213,6 @@ func Run(ctx context.Context, store *redisx.Store, directory string, options Opt
 		ingestLog.Printf("staged source rows=%d", len(source.Rows))
 		counts[name] = len(source.Rows)
 	}
-	diagnostics := buildDiagnostics(canonical)
 	if err := store.PutDiagnostics(ctx, generation, diagnostics); err != nil {
 		return Result{}, fmt.Errorf("stage diagnostics: %w", err)
 	}
@@ -218,6 +226,20 @@ func Run(ctx context.Context, store *redisx.Store, directory string, options Opt
 		Generation: generation, Revision: revision, DataRevision: dataRevision,
 		EvaluatedAt: evaluatedAt.Format(time.RFC3339Nano), Counts: counts,
 	}, nil
+}
+
+func validateDiagnostics(diagnostics model.Diagnostics) error {
+	if len(diagnostics.RelationshipErrors) > 0 {
+		return fmt.Errorf("canonical projection has %d relationship errors", len(diagnostics.RelationshipErrors))
+	}
+	duplicateCount := 0
+	for _, ids := range diagnostics.DuplicateRecordIDs {
+		duplicateCount += len(ids)
+	}
+	if duplicateCount > 0 {
+		return fmt.Errorf("canonical projection has %d duplicate record IDs", duplicateCount)
+	}
+	return nil
 }
 
 func sourceEvaluationTime(sources map[string]model.Source) time.Time {
@@ -369,6 +391,16 @@ func projectSources(canonical map[string][]model.Row, inventory map[string]model
 		} else {
 			sources[name] = mergeLogical(sources[name], result)
 		}
+	}
+	for _, name := range []string{"jobs", "sessions", "events"} {
+		if len(canonical[name]) == 0 {
+			continue
+		}
+		sources[name] = mergeLogical(sources[name], model.Source{
+			Source:   name,
+			Rows:     canonical[name],
+			Metadata: model.Metadata{"availability": availability(canonical[name])},
+		})
 	}
 	runRecords, ok := index["run-records"]
 	if ok {
@@ -622,10 +654,13 @@ func relationshipErrors(canonical map[string][]model.Row) []string {
 			result = append(result, fmt.Sprintf("%s.workflowId references a workflow from another repository", row["id"]))
 		}
 	}
-	for _, collection := range []string{"domains", "tools", "audits", "issues"} {
+	for _, collection := range []string{"jobs", "sessions", "domains", "tools", "audits", "issues"} {
 		for _, row := range canonical[collection] {
 			require(row, "runId", "runs", "run")
 		}
+	}
+	for _, row := range canonical["events"] {
+		require(row, "sessionId", "sessions", "session")
 	}
 	for _, row := range canonical["operationalValues"] {
 		require(row, "repositoryId", "repositories", "repository")
