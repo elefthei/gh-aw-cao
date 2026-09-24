@@ -20,7 +20,7 @@ test('cao operational-value runs package scripts and ingests emitted JSONL', () 
 const request = JSON.parse(readFileSync(0, 'utf8'));
 for (const repository of request.repositories) {
   const isolated = process.env.GH_TOKEN === "read-only-token" && process.env.UNRELATED_SECRET === undefined;
-  console.log(JSON.stringify({timestamp:request.timestamp,repository,valueId:"example-count",value:isolated ? 2 : 0}));
+  console.log(JSON.stringify({timestamp:request.timestamp,repository,valueId:"example-count",value:isolated ? 2 : 0,metricRole:"diagnostic",metricName:"Example count",metricDirection:"decrease",maturityStatus:"interim"}));
 }\n`);
   chmodSync(script, 0o755);
 
@@ -52,6 +52,18 @@ for (const repository of request.repositories) {
     { repository: 'github/gh-aw', valueId: 'example-count', value: 2 },
     { repository: 'githubnext/gh-aw-cao', valueId: 'example-count', value: 2 },
   ]);
+  assert.deepEqual(
+    stored.map((record) => ({
+      role: record['operational-value-role'],
+      name: record['operational-value-name'],
+      direction: record['operational-value-direction'],
+      maturity: record['maturity-status'],
+    })),
+    [
+      { role: 'diagnostic', name: 'Example count', direction: 'decrease', maturity: 'interim' },
+      { role: 'diagnostic', name: 'Example count', direction: 'decrease', maturity: 'interim' },
+    ],
+  );
 });
 
 test('cao operational-value warns on worker failure and preserves successful values', () => {
