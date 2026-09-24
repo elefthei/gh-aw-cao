@@ -712,20 +712,28 @@ describe('dashboard document validation', () => {
     );
 
     expect(page.definition.views.find((/** @type {{ id: string }} */ view) =>
-      view.id === 'workflows-by-runs'
+      view.id === 'workflows-by-aic-per-run'
     )).toMatchObject({
       data: {
-        source: 'workflow-inventory',
-        'order-by': [{ field: 'runs', direction: 'desc' }],
+        source: 'workflow-aic-per-run',
+        'order-by': [{ field: 'aic-per-run', direction: 'desc' }],
         limit: 10
       },
       mark: 'chart',
-      chart: 'pie',
-      layout: 'horizontal',
+      chart: 'horizontal-bar',
+      layout: 'full',
       encoding: {
         x: { field: 'workflow-label', type: 'nominal', format: 'workflow-identity-label' },
-        y: { field: 'runs', type: 'quantitative' },
+        y: { field: 'aic-per-run', type: 'quantitative', unit: 'aic-per-run' },
         href: { field: 'workflow-link', type: 'nominal' }
+      }
+    });
+    expect(document.dashboard.queries.find((/** @type {{ name: string }} */ query) =>
+      query.name === 'workflow-aic-per-run'
+    )).toMatchObject({
+      from: 'workflow-inventory',
+      filter: {
+        predicates: [{ field: 'has-observed-runs', equals: true }]
       }
     });
     expect(page.definition.views.find((/** @type {{ id: string }} */ view) =>
