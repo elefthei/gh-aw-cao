@@ -35,6 +35,7 @@ const MAX_INCREMENTAL_SWIMLANE_RENDERS = 10;
 const REPOSITORY_LINK_DISPLAY = 'repository-link';
 const WORKFLOW_LINK_DISPLAY = 'workflow-link';
 const debugChart = createDebug('render:chart');
+const debugContinuation = createDebug('data:continuation');
 const GITHUB_ENTITY_DISPLAY_FIELDS = {
   [REPOSITORY_LINK_DISPLAY]: 'repository',
   [WORKFLOW_LINK_DISPLAY]: 'workflow'
@@ -1058,9 +1059,23 @@ function renderMobileTableCardList(context, columns, rows, renderValue, rowLimit
   return region;
 }
 
+// Bounds how many resolved continuation rows `replayableContinuation` keeps
+// cached to let a lagging consumer (the table and mobile card list read the
+// same continuation independently) catch up without refetching. Retaining
+// every page ever loaded would hold an entire large table in memory as a
+// user scrolls through it, so this optimization only kicks in once the
+// cached pages together hold more rows than small tables ever reach; below
+// this threshold every loaded page stays cached for cheap replay.
+const CONTINUATION_CACHE_ROW_THRESHOLD = 2048;
+
 /**
  * Makes a stateful source continuation safe for the table and card-list
- * presentations to consume independently by replaying already loaded pages.
+ * presentations to consume independently by replaying already loaded pages,
+ * without retaining the whole paged result set in memory once a table grows
+ * large. Pages stay cached while their combined row count is at or below
+ * `CONTINUATION_CACHE_ROW_THRESHOLD`; beyond that, the oldest pages are
+ * forgotten as new ones load so a consumer scrolling through a large table
+ * does not accumulate every page it has ever loaded.
  * @param {DataViewContext['continuation']} continuation
  * @returns {DataViewContext['continuation']}
  */
@@ -1068,13 +1083,52 @@ function replayableContinuation(continuation) {
   if (!continuation) return undefined;
   /** @type {Map<string, Promise<{ rows: Array<Record<string, unknown>>, continuationToken?: string }>>} */
   const pages = new Map();
+  /** @type {Map<string, number>} */
+  const rowCounts = new Map();
+  let cachedRowCount = 0;
+  const forgetOldestPagesAboveThreshold = () => {
+    while (cachedRowCount > CONTINUATION_CACHE_ROW_THRESHOLD && pages.size > 1) {
+      const oldestToken = pages.keys().next().value;
+      if (oldestToken === undefined) break;
+      const forgottenRows = rowCounts.get(oldestToken) ?? 0;
+      pages.delete(oldestToken);
+      cachedRowCount -= forgottenRows;
+      rowCounts.delete(oldestToken);
+      debugContinuation('forgot cached continuation page', {
+        token: oldestToken,
+        forgottenRows,
+        cachedRowCount,
+        cachedPages: pages.size,
+        threshold: CONTINUATION_CACHE_ROW_THRESHOLD
+      });
+    }
+  };
   return {
     ...continuation,
     load(token) {
       const existing = pages.get(token);
-      if (existing) return existing;
-      const loaded = continuation.load(token).catch((error) => {
+      if (existing) {
+        debugContinuation('replayed cached continuation page', { token, cachedPages: pages.size, cachedRowCount });
+        return existing;
+      }
+      const loaded = continuation.load(token).then((page) => {
+        const rowCount = Array.isArray(page.rows) ? page.rows.length : 0;
+        rowCounts.set(token, rowCount);
+        cachedRowCount += rowCount;
+        if (cachedRowCount > CONTINUATION_CACHE_ROW_THRESHOLD) {
+          debugContinuation('cached continuation rows exceeded memory threshold', {
+            token,
+            rowCount,
+            cachedRowCount,
+            cachedPages: pages.size,
+            threshold: CONTINUATION_CACHE_ROW_THRESHOLD
+          });
+        }
+        forgetOldestPagesAboveThreshold();
+        return page;
+      }).catch((error) => {
         pages.delete(token);
+        rowCounts.delete(token);
         throw error;
       });
       pages.set(token, loaded);
