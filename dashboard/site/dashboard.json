@@ -1567,7 +1567,7 @@
     "queries": [
       {
         "name": "runs-daily-conclusions",
-        "intent": "Aggregate workflow run conclusions by UTC day for the Runs line graph.",
+        "intent": "Aggregate workflow run conclusions by UTC day for the Runs stacked area graph.",
         "from": "runs",
         "compute": [
           {
@@ -11590,7 +11590,7 @@
                 }
               },
               "mark": "chart",
-              "chart": "line",
+              "chart": "area",
               "layout": "horizontal",
               "encoding": {
                 "x": {
