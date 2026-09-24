@@ -1659,7 +1659,7 @@
     "queries": [
       {
         "name": "runs-daily-conclusions",
-        "intent": "Aggregate workflow run conclusions by UTC day for the Runs swimlane.",
+        "intent": "Aggregate workflow run conclusions by UTC day for the Runs line graph.",
         "from": "runs",
         "compute": [
           {
@@ -11748,7 +11748,7 @@
                 }
               },
               "mark": "chart",
-              "chart": "swimlane",
+              "chart": "line",
               "layout": "horizontal",
               "encoding": {
                 "x": {
@@ -11758,17 +11758,13 @@
                   "title": "Started"
                 },
                 "y": {
-                  "field": "run-conclusion",
-                  "type": "ordinal",
-                  "title": "Conclusion"
+                  "field": "runs",
+                  "type": "quantitative",
+                  "title": "Runs"
                 },
                 "color": {
                   "field": "run-conclusion",
                   "type": "nominal"
-                },
-                "weight": {
-                  "field": "runs",
-                  "type": "quantitative"
                 }
               }
             },
