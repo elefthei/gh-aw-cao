@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
 import { enableLazyViews } from '../../src/components/lazy-view.js';
-import { renderUiElement } from '../../src/components/ui-elements.js';
+import { elementLoadsSourcesAsync, renderUiElement } from '../../src/components/ui-elements.js';
 
 const metadata = {
   'source-id': 'signal-fixture',
@@ -39,6 +39,10 @@ function declarativeWorkRow(row) {
 }
 
 describe('UI elements', () => {
+  it('keeps campaign route identity in the active page subscription', () => {
+    expect(elementLoadsSourcesAsync('campaign-route')).toBe(false);
+  });
+
   it('composes operational value, outcomes, cost, runtime, security, and experiments in Insights', () => {
     /** @param {Array<Record<string, unknown>>} rows */
     const source = (rows) => ({ source: 'fixture', rows, metadata });
@@ -100,18 +104,13 @@ describe('UI elements', () => {
     }
   });
 
-  it('renders every campaign operational-value extract in separate primary and diagnostic histories', () => {
-    const rendered = renderUiElement('campaign-route', {
+  it('renders every grouped measure extract in separate primary and diagnostic histories', () => {
+    const rendered = renderUiElement('measure-history', {
       pageId: 'campaign-insights', title: 'Operational value history',
       routeParameter: 'campaign',
-      elementConfig: { body: 'insights' },
-      sourceNames: ['workflows', 'campaign-operational-value-series'],
+      elementConfig: {},
+      sourceNames: ['campaign-operational-value-series'],
       sources: {
-        workflows: {
-          source: 'workflows',
-          metadata,
-          rows: [{ campaign: 'alpha-campaign', 'campaign-name': 'Alpha campaign', workflow: '.github/workflows/worker.md' }]
-        },
         'campaign-operational-value-series': {
           source: 'campaign-operational-value-series',
           metadata,
@@ -125,10 +124,6 @@ describe('UI elements', () => {
       contextDetails: [],
       headingTag: 'h3'
     });
-    rendered?.dispatchEvent(new CustomEvent('dashboard-route-change', {
-      detail: { parameter: 'campaign', value: 'alpha-campaign' }
-    }));
-
     expect(rendered?.querySelectorAll('[data-chart-widget="line"]')).toHaveLength(3);
     expect([...rendered?.querySelectorAll('.insights-measure-row h3') ?? []].map((heading) => heading.textContent)).toEqual([
       'Repository readiness',
@@ -738,10 +733,11 @@ describe('UI elements', () => {
     expect(summary?.textContent).toContain('Daily Ops');
   });
 
-  it('renders campaign-detail through the reusable campaign-route variant without relying on page identity', () => {
-    const rendered = renderUiElement('campaign-detail', {
+  it('renders campaign info through the reusable campaign-route element without relying on page identity', () => {
+    const rendered = renderUiElement('campaign-route', {
       pageId: 'totally-custom-campaign-page',
       title: 'Campaign workflows',
+      elementConfig: { body: 'overview' },
       sourceNames: ['workflows'],
       routeParameter: 'campaign',
       headingTag: 'h3',
@@ -769,8 +765,8 @@ describe('UI elements', () => {
       detail: { parameter: 'campaign', value: 'sample-campaign' }
     }));
 
-    expect(rendered?.querySelector('.campaign-tabs [aria-current="page"]')?.textContent).toBe('Info');
-    expect(rendered?.querySelector('.campaign-tabs')?.textContent).toBe('InsightsProblemsDispatchesIssuesInfo');
+    expect(rendered?.querySelector('.campaign-tabs [aria-current="page"]')).toBeNull();
+    expect(rendered?.querySelector('.campaign-tabs')?.textContent).toBe('InsightsProblemsIssues');
   });
 
   it('renders the campaigns page shell through one declarative element composition', () => {

@@ -64,7 +64,8 @@ export const UNIT_FORMAT_VALUES = ['duration', 'number', 'usd'];
 export const NAVIGATION_SECTION_KEYS = ['label', 'pages', 'experimental', 'placement'];
 export const BUILT_IN_PAGE_KEYS = ['id', 'kind', 'page', 'title', 'navigation-label', 'description', 'icon', 'class-name', 'filter-bar', 'definition'];
 export const CUSTOM_PAGE_KEYS = ['id', 'kind', 'title', 'navigation-label', 'description', 'icon', 'class-name', 'filter-bar', 'route', 'views', 'sections'];
-export const PAGE_ROUTE_KEYS = ['hash-query-parameter', 'navigation-page', 'tab', 'tabs'];
+export const PAGE_ROUTE_KEYS = ['hash-query-parameter', 'navigation-page', 'title-format', 'tabs-class-name', 'tab', 'tabs'];
+export const PAGE_ROUTE_TITLE_FORMAT_VALUES = ['title-case'];
 export const PAGE_ROUTE_TAB_KEYS = ['id', 'label', 'icon', 'page'];
 export const MAX_PAGE_ROUTE_TABS = 8;
 
@@ -96,10 +97,6 @@ export const VIEW_ELEMENT_VALUES = [
   'campaign-utilization',
   'campaign-run-trend',
   'campaign-summary-table',
-  'campaign-insights',
-  'campaign-detail',
-  'campaign-dispatches',
-  'campaign-reports',
   'campaign-route',
   'workflow-route',
   'workflow-route-page',
@@ -109,6 +106,7 @@ export const VIEW_ELEMENT_VALUES = [
   'configuration-actions',
   'local-database',
   'work-project-view',
+  'measure-history',
   'insights-overview',
   'factory-header',
   'factory-floor',

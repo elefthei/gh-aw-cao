@@ -81,6 +81,7 @@ import {
   ORDER_DIRECTION_VALUES,
   OUTCOME_STATE_VALUES,
   PAGE_ROUTE_KEYS,
+  PAGE_ROUTE_TITLE_FORMAT_VALUES,
   PAGE_ROUTE_TAB_KEYS,
   MAX_PAGE_ROUTE_TABS,
   PAGE_ICON_VALUES,
@@ -2234,7 +2235,7 @@ function validateRouteTabs(route, routePath, errors) {
       identifiers.add(tab.id);
     }
   }
-  if (typeof route.tab !== 'string' || !identifiers.has(route.tab)) {
+  if (route.tab !== undefined && (typeof route.tab !== 'string' || !identifiers.has(route.tab))) {
     errors.push(createError(
       ERROR_CODES.missingOrInvalidRequiredField,
       'route tab must name one declared route tab id.',
@@ -2288,6 +2289,24 @@ function validateCustomPage(page, pageNode, path, errors) {
           page.route['navigation-page'],
           `${routePath}.navigation-page`,
           'route navigation page',
+          errors
+        );
+      }
+      const routeTitleFormat = page.route['title-format'];
+      if (routeTitleFormat !== undefined
+          && (typeof routeTitleFormat !== 'string'
+            || !PAGE_ROUTE_TITLE_FORMAT_VALUES.includes(routeTitleFormat))) {
+        errors.push(createError(
+          ERROR_CODES.nonCanonicalVocabularyOrIdentifier,
+          `route title-format must be one of: ${PAGE_ROUTE_TITLE_FORMAT_VALUES.join(', ')}.`,
+          `${routePath}.title-format`
+        ));
+      }
+      if (page.route['tabs-class-name'] !== undefined) {
+        validateRequiredIdentifier(
+          page.route['tabs-class-name'],
+          `${routePath}.tabs-class-name`,
+          'route tabs class name',
           errors
         );
       }
