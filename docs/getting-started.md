@@ -82,7 +82,7 @@ curl --fail --silent --show-error --location \
   bash
 ```
 
-The script installs `gh-aw` when needed, adds the latest published core CAO campaign, initializes the minimal control policy, and makes the repository-local `./cao.sh` CLI executable. If an installed `gh-aw` is too old for the campaign, the installer asks before running `gh extension upgrade gh-aw`. Declining or running without an interactive terminal stops setup without an error; run `gh extension upgrade gh-aw` and rerun the installer when ready. Rerunning it after those files are installed makes no changes. Use the individual `gh aw` and CAO CLI commands when you intentionally need an older campaign release.
+The script installs `gh-aw` when needed, adds the latest published core CAO campaign, initializes the minimal control policy, and makes the repository-local `./cao.sh` CLI executable. If an installed `gh-aw` is too old for the campaign, the installer asks before reinstalling the required version with gh-aw's `install-gh-aw.sh` script and verifies the result. Declining or running without an interactive terminal stops setup without an error and prints the install command to run before rerunning the installer. It passes `--no-security-scanner` to `gh aw add` because gh-aw's markdown scanner rejects the GitHub App manifest page in `.github/workflows/shared/setup-github-apps.mjs`; review the installed diff before committing. Rerunning it after those files are installed makes no changes. Use the individual `gh aw` and CAO CLI commands when you intentionally need an older campaign release.
 
 The root campaign installs:
 
@@ -132,7 +132,7 @@ Add the target owner to the generated `.github/workflows/cao.json`. The campaign
 Replace `acme` if your target has a different owner. Commit the workflow sources, generated locks, CAO runtime resources, and policy together so `github.workflow_sha` identifies one atomic configuration:
 
 ```bash
-git add .github
+git add .github activity dashboard cao.sh
 git commit -m "Install reviewed Dependabot campaign"
 git push --set-upstream origin HEAD
 ```

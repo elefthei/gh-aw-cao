@@ -17,6 +17,7 @@ const campaignSource = process.env.CENTRAL_AGENTIC_OPS_CAMPAIGN_SOURCE
   || "githubnext/gh-aw-cao@main";
 const campaignUpdateSource = "https://github.com/githubnext/gh-aw-cao";
 const materializerScript = resolve(".github/workflows/shared/materialize-cao.mjs");
+const installerSource = readFileSync(resolve("install.sh"), "utf8");
 const controlRuntimeFiles = [
   ".github/workflows/shared/control.mjs",
   ".github/workflows/shared/policy.mjs",
@@ -176,21 +177,30 @@ function installedManifests(consumer) {
   return readdirSync(join(consumer, ".github", "aw", "packages"));
 }
 
-function run(command, args, cwd) {
+function run(command, args, cwd, input = undefined) {
   return execFileSync(command, args, {
     cwd,
     encoding: "utf8",
     env: process.env,
+    input,
     maxBuffer: 16 * 1024 * 1024,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
   });
 }
 
 async function installCampaign(source) {
+  const packageName = source.slice(0, source.lastIndexOf("@"));
+  const campaign = packageName === "githubnext/gh-aw-cao"
+    ? "root"
+    : packageName.split("/").at(-1);
   return retryTransientCampaignInstall(() => {
     const consumer = mkdtempSync(join(tmpdir(), "central-agentic-ops-campaign-"));
     try {
       run("git", ["init", "--quiet"], consumer);
+      if (campaign === "root") {
+        run("bash", ["-s", "--", source], consumer, installerSource);
+        return consumer;
+      }
       run("gh", [
         "aw",
         "add",
@@ -198,10 +208,6 @@ async function installCampaign(source) {
         "--force",
         "--no-security-scanner",
       ], consumer);
-      const packageName = source.slice(0, source.lastIndexOf("@"));
-      const campaign = packageName === "githubnext/gh-aw-cao"
-        ? "root"
-        : packageName.split("/").at(-1);
       if (campaign !== "activity" && campaign !== "dashboard") {
         run(process.execPath, [materializerScript, "materialize", campaign], consumer);
       }
@@ -211,6 +217,17 @@ async function installCampaign(source) {
       throw error;
     }
   });
+}
+
+function assertInstalledBootstrap(repository, ghAwVersion) {
+  const policy = ".github/workflows/cao.json";
+  const control = ".github/workflows/shared/control.mjs";
+  run("./cao.sh", ["--help"], repository);
+  for (const bundle of ["activity", "dashboard"]) {
+    run(process.execPath, [".github/workflows/shared/materialize-cao.mjs", "verify", bundle], repository);
+  }
+  run(process.execPath, [control, "validate-policy", policy], repository);
+  assert.equal(run(process.execPath, [control, "compiler-version", policy], repository).trim(), ghAwVersion);
 }
 
 test("root campaign bootstraps an empty CAO and preserves resources during workflow update", { timeout: 240_000 }, async () => {
@@ -225,6 +242,31 @@ test("root campaign bootstraps an empty CAO and preserves resources during workf
       assert.equal(existsSync(join(consumer, relativePath)), false, `root campaign retained project skill ${relativePath}`);
     }
     const policyPath = join(consumer, ".github", "workflows", "cao.json");
+    const ghAwVersion = run("bash", ["-c", "gh aw version 2>&1"], consumer)
+      .match(/\bv[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?\b/)?.[0];
+    assert.ok(ghAwVersion, "gh aw version did not report a version");
+    const initializedPolicy = JSON.parse(readFileSync(policyPath, "utf8"));
+    assert.equal(initializedPolicy.version, 1);
+    assert.equal(initializedPolicy["gh-aw-version"], ghAwVersion);
+    assert.deepEqual(initializedPolicy["control-plane"], { campaigns: {} });
+    assertInstalledBootstrap(consumer, ghAwVersion);
+
+    run("git", ["add", ".github", "activity", "dashboard", "cao.sh"], consumer);
+    run("git", [
+      "-c", "user.name=CAO installer test",
+      "-c", "user.email=cao-installer-test@example.invalid",
+      "-c", "commit.gpgsign=false",
+      "-c", "core.hooksPath=/dev/null",
+      "commit", "--quiet", "-m", "CAO installer smoke",
+    ], consumer);
+    const checkout = mkdtempSync(join(tmpdir(), "central-agentic-ops-checkout-"));
+    try {
+      run("git", ["clone", "--quiet", consumer, checkout], tmpdir());
+      assertInstalledBootstrap(checkout, ghAwVersion);
+    } finally {
+      rmSync(checkout, { recursive: true, force: true });
+    }
+
     const policy = `${JSON.stringify({
       version: 1,
       "control-plane": {

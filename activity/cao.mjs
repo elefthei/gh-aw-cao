@@ -227,7 +227,8 @@ function parseGhAwVersion(result) {
   if (result.error || result.status !== 0) {
     throw new Error(`Unable to determine gh-aw version: ${(result.stderr || '').trim() || result.error?.message || 'gh aw version failed'}`);
   }
-  const version = String(result.stdout || '').match(/\bv[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?\b/)?.[0];
+  // gh-aw prints its version on stderr; accept either stream.
+  const version = `${result.stdout || ''}\n${result.stderr || ''}`.match(/\bv[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?\b/)?.[0];
   if (!version) throw new Error('Unable to determine gh-aw version from "gh aw version" output');
   return version;
 }

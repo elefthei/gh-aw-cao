@@ -14,10 +14,11 @@ import {
   updateCaoCampaigns,
 } from "../../activity/cao.mjs";
 
+// gh-aw writes `gh aw version` output to stderr.
 const versionResult = {
   status: 0,
-  stdout: "gh aw version v0.89.17\n",
-  stderr: "",
+  stdout: "",
+  stderr: "gh aw version v0.89.17\n",
 };
 
 test("cao init writes the minimal control-plane policy", async () => {
