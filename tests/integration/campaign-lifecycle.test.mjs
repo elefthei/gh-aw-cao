@@ -16,6 +16,10 @@ import { retryTransientCampaignInstall } from "../helpers/campaign-install-retry
 const campaignSource = process.env.CENTRAL_AGENTIC_OPS_CAMPAIGN_SOURCE
   || "githubnext/gh-aw-cao@main";
 const campaignUpdateSource = "https://github.com/githubnext/gh-aw-cao";
+// Public read-only identity for the disposable consumer's `origin`. It must
+// differ from the catalog because gh aw refuses to add workflows into their
+// own source repository; the consumer is never pushed.
+const consumerRepository = "octocat/Hello-World";
 const materializerScript = resolve(".github/workflows/shared/materialize-cao.mjs");
 const installerSource = readFileSync(resolve("install.sh"), "utf8");
 const controlRuntimeFiles = [
@@ -198,8 +202,7 @@ async function installCampaign(source) {
     try {
       run("git", ["init", "--quiet"], consumer);
       if (campaign === "root") {
-        // Read-only GitHub context for the installer's current-repository lookup; never pushed.
-        run("git", ["remote", "add", "origin", `https://github.com/${packageName}.git`], consumer);
+        run("git", ["remote", "add", "origin", `https://github.com/${consumerRepository}.git`], consumer);
         run("bash", ["-s", "--", source], consumer, installerSource);
         return consumer;
       }
@@ -265,6 +268,7 @@ test("root campaign bootstraps an empty CAO and preserves resources during workf
     assert.ok(ghAwVersion, "gh aw version did not report a version");
     const initializedPolicy = JSON.parse(readFileSync(policyPath, "utf8"));
     const controlRepository = run("gh", ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], consumer).trim();
+    assert.equal(controlRepository, consumerRepository);
     assert.equal(initializedPolicy.version, 1);
     assert.equal(initializedPolicy["gh-aw-version"], ghAwVersion);
     assert.deepEqual(initializedPolicy["control-plane"], {
