@@ -99,14 +99,14 @@ Use the `add-cao-campaign` skill to discover and compare catalog campaigns when 
 ./cao.sh add githubnext/gh-aw-cao/dependabot
 ```
 
-Run CAO commands from the control repository with `./cao.sh`. Its `init` command creates the minimal `.github/workflows/cao.json` and refuses to overwrite an existing policy. `setup-auth` configures private organization or enterprise Apps, an explicitly acknowledged fine-grained token, or the built-in workflow-token profile. `add` invokes `gh aw add`, reads the installed campaign's CAO declaration, and adds its worker identities without enabling live mode or broadening repository scope. `update` upgrades `gh-aw` to the policy's minimum version, updates installed campaigns, and refreshes declared worker identities while preserving operator-owned rollout settings. Use `mode live CAMPAIGN...` to promote configured campaigns or `mode preview CAMPAIGN...` to return them to review mode; the command validates every campaign name before updating `.github/workflows/cao.json`. Use `enable CAMPAIGN...` or `disable CAMPAIGN...` to run the corresponding GitHub workflow action for each campaign's orchestrator and every declared worker workflow.
+Run CAO commands from the control repository with `./cao.sh`. Its `init` command creates the minimal `.github/workflows/cao.json` and refuses to overwrite an existing policy. The new policy's `control-plane.scope` allows only the repository that `gh repo view` reports for the current checkout, so the first Activity run can collect the control repository with the built-in workflow token; `init` fails without writing a policy when that repository cannot be determined. Broaden scope only as an explicit policy and credential decision. `setup-auth` configures private organization or enterprise Apps, an explicitly acknowledged fine-grained token, or the built-in workflow-token profile. `add` invokes `gh aw add`, reads the installed campaign's CAO declaration, and adds its worker identities without enabling live mode or broadening repository scope. `update` upgrades `gh-aw` to the policy's minimum version, updates installed campaigns, and refreshes declared worker identities while preserving operator-owned rollout settings. Use `mode live CAMPAIGN...` to promote configured campaigns or `mode preview CAMPAIGN...` to return them to review mode; the command validates every campaign name before updating `.github/workflows/cao.json`. Use `enable CAMPAIGN...` or `disable CAMPAIGN...` to run the corresponding GitHub workflow action for each campaign's orchestrator and every declared worker workflow.
 
 > [!WARNING]
 > Do not edit generated `.lock.yml` files directly. Update their Markdown sources and regenerate them with `gh aw compile`.
 
 ### Step 4 - Set the first-run boundary
 
-Add the target owner to the generated `.github/workflows/cao.json`. The campaign and worker declaration is already present; omitted campaign settings default to `review`, one repository, and 100 percent rollout:
+The installer scoped the generated `.github/workflows/cao.json` to the control repository itself. Replace that bootstrap entry with the target: set `allowed-owners` to its owner and `allowed-repositories` to exactly `TARGET_REPO`. Keep the control repository only if it is also a target you want reviewed. The campaign and worker declaration is already present; omitted campaign settings default to `review`, one repository, and 100 percent rollout:
 
 ```json title=".github/workflows/cao.json"
 {
@@ -114,7 +114,8 @@ Add the target owner to the generated `.github/workflows/cao.json`. The campaign
 	"gh-aw-version": "v0.89.21",
 	"control-plane": {
 		"scope": {
-			"allowed-owners": ["acme"]
+			"allowed-owners": ["acme"],
+			"allowed-repositories": ["acme/example-service"]
 		},
 		"campaigns": {
 			"dependabot": {
@@ -129,7 +130,7 @@ Add the target owner to the generated `.github/workflows/cao.json`. The campaign
 }
 ```
 
-Replace `acme` if your target has a different owner. Commit the workflow sources, generated locks, CAO runtime resources, and policy together so `github.workflow_sha` identifies one atomic configuration:
+Replace `acme/example-service` with your `TARGET_REPO`. Commit the workflow sources, generated locks, CAO runtime resources, and policy together so `github.workflow_sha` identifies one atomic configuration:
 
 ```bash
 git add .github activity dashboard cao.sh

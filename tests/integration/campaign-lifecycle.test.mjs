@@ -198,6 +198,8 @@ async function installCampaign(source) {
     try {
       run("git", ["init", "--quiet"], consumer);
       if (campaign === "root") {
+        // Read-only GitHub context for the installer's current-repository lookup; never pushed.
+        run("git", ["remote", "add", "origin", `https://github.com/${packageName}.git`], consumer);
         run("bash", ["-s", "--", source], consumer, installerSource);
         return consumer;
       }
@@ -219,7 +221,7 @@ async function installCampaign(source) {
   });
 }
 
-function assertInstalledBootstrap(repository, ghAwVersion) {
+function assertInstalledBootstrap(repository, ghAwVersion, controlRepository) {
   const policy = ".github/workflows/cao.json";
   const control = ".github/workflows/shared/control.mjs";
   run("./cao.sh", ["--help"], repository);
@@ -228,6 +230,22 @@ function assertInstalledBootstrap(repository, ghAwVersion) {
   }
   run(process.execPath, [control, "validate-policy", policy], repository);
   assert.equal(run(process.execPath, [control, "compiler-version", policy], repository).trim(), ghAwVersion);
+
+  const settingsDirectory = mkdtempSync(join(tmpdir(), "central-agentic-ops-settings-"));
+  try {
+    const settingsPath = join(settingsDirectory, "control-settings.json");
+    execFileSync(process.execPath, ["activity/control-settings.mjs", control, policy, settingsPath], {
+      cwd: repository,
+      encoding: "utf8",
+      env: { ...process.env, GITHUB_REPOSITORY: controlRepository },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+    assert.equal(settings.policy_resolution.status, "available", settings.policy_resolution.reason);
+    assert.deepEqual(settings.allowed_repositories, [controlRepository]);
+  } finally {
+    rmSync(settingsDirectory, { recursive: true, force: true });
+  }
 }
 
 test("root campaign bootstraps an empty CAO and preserves resources during workflow update", { timeout: 240_000 }, async () => {
@@ -246,10 +264,17 @@ test("root campaign bootstraps an empty CAO and preserves resources during workf
       .match(/\bv[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?\b/)?.[0];
     assert.ok(ghAwVersion, "gh aw version did not report a version");
     const initializedPolicy = JSON.parse(readFileSync(policyPath, "utf8"));
+    const controlRepository = run("gh", ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], consumer).trim();
     assert.equal(initializedPolicy.version, 1);
     assert.equal(initializedPolicy["gh-aw-version"], ghAwVersion);
-    assert.deepEqual(initializedPolicy["control-plane"], { campaigns: {} });
-    assertInstalledBootstrap(consumer, ghAwVersion);
+    assert.deepEqual(initializedPolicy["control-plane"], {
+      scope: {
+        "allowed-owners": [controlRepository.split("/")[0]],
+        "allowed-repositories": [controlRepository],
+      },
+      campaigns: {},
+    });
+    assertInstalledBootstrap(consumer, ghAwVersion, controlRepository);
 
     run("git", ["add", ".github", "activity", "dashboard", "cao.sh"], consumer);
     run("git", [
@@ -262,7 +287,7 @@ test("root campaign bootstraps an empty CAO and preserves resources during workf
     const checkout = mkdtempSync(join(tmpdir(), "central-agentic-ops-checkout-"));
     try {
       run("git", ["clone", "--quiet", consumer, checkout], tmpdir());
-      assertInstalledBootstrap(checkout, ghAwVersion);
+      assertInstalledBootstrap(checkout, ghAwVersion, controlRepository);
     } finally {
       rmSync(checkout, { recursive: true, force: true });
     }

@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
+import fs from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
+import vm from "node:vm";
 import { parse } from "yaml";
 
 const executeFile = promisify(execFile);
@@ -41,11 +43,14 @@ await executeFile("tar", [
     .map((member) => `${path.basename(catalog)}/${member}`),
 ]);
 await writeFile(mockFetch, `
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 
 const expected = "https://codeload.github.com/githubnext/gh-aw-cao/tar.gz/${revision}";
+const responses = process.env.FAKE_GITHUB_RESPONSES ? JSON.parse(process.env.FAKE_GITHUB_RESPONSES) : {};
 globalThis.fetch = async (input) => {
   const url = typeof input === "string" ? input : input.url ?? String(input);
+  if (process.env.FAKE_GITHUB_REQUESTS) appendFileSync(process.env.FAKE_GITHUB_REQUESTS, url + "\\n");
+  if (Object.hasOwn(responses, url)) return Response.json(responses[url]);
   if (url !== expected) throw new Error("unexpected fetch: " + url);
   const status = Number(process.env.FAKE_CAO_ARCHIVE_STATUS || 200);
   if (status !== 200) return new Response("unavailable", { status });
@@ -54,8 +59,18 @@ globalThis.fetch = async (input) => {
 `);
 test.after(() => rm(fixtureRoot, { recursive: true, force: true }));
 
+// FAKE_CONTROL_REPOSITORY is gh's answer for the consumer checkout; when it is
+// unset the lookup fails as it does outside a GitHub repository checkout.
 const fakeGh = `#!/usr/bin/env bash
 set -euo pipefail
+if [[ "$*" == "repo view --json nameWithOwner --jq .nameWithOwner" ]]; then
+  if [[ -z "\${FAKE_CONTROL_REPOSITORY+set}" ]]; then
+    echo "none of the git remotes configured for this repository point to a known GitHub host" >&2
+    exit 1
+  fi
+  printf '%s\\n' "$FAKE_CONTROL_REPOSITORY"
+  exit 0
+fi
 if [[ "\${1:-} \${2:-}" == "aw version" ]]; then
   [[ -f "$FAKE_GH_AW_INSTALLED" ]] || exit 1
   echo "gh aw version $(cat "$FAKE_GH_AW_INSTALLED")" >&2
@@ -100,7 +115,7 @@ printf '%s\\n' "$1" > "$FAKE_GH_AW_INSTALLED"
 EOF
 `;
 
-async function createConsumer(t, ghAwVersion) {
+async function createConsumer(t, ghAwVersion, { repository = "alpha-org/control" } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "cao-install-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const bin = path.join(root, "bin");
@@ -123,9 +138,12 @@ async function createConsumer(t, ghAwVersion) {
     FAKE_CAO_ARCHIVE: archive,
     FAKE_COMMAND_LOG: log,
     FAKE_GH_AW_INSTALLED: ghAwInstalled,
+    FAKE_CONTROL_REPOSITORY: repository,
   };
   return {
+    root,
     consumer,
+    repository,
     env,
     log: () => readFile(log, "utf8"),
     installedGhAw: () => readFile(ghAwInstalled, "utf8"),
@@ -188,11 +206,14 @@ async function assertExecutable(file) {
   if (process.platform !== "win32") assert.notEqual((await stat(file)).mode & 0o111, 0);
 }
 
-async function assertCompleteInstall(consumer, env, ghAwVersion) {
+async function assertCompleteInstall(consumer, env, ghAwVersion, repository) {
   const policy = JSON.parse(await readFile(path.join(consumer, policyPath), "utf8"));
   assert.equal(policy.version, 1);
   assert.equal(policy["gh-aw-version"], ghAwVersion);
-  assert.deepEqual(policy["control-plane"], { campaigns: {} });
+  assert.deepEqual(policy["control-plane"], {
+    scope: { "allowed-owners": [repository.split("/")[0]], "allowed-repositories": [repository] },
+    campaigns: {},
+  });
   await assertExecutable(path.join(consumer, "cao.sh"));
   const launcher = process.platform === "win32" ? ["bash", ["./cao.sh", "--help"]] : ["./cao.sh", ["--help"]];
   await executeFile(...launcher, { cwd: consumer, env, timeout });
@@ -206,18 +227,135 @@ async function assertNothingInstalled(consumer) {
   assert.equal(await exists(path.join(consumer, "cao.sh")), false);
 }
 
+const githubApi = "https://api.example.invalid";
+const deterministicWorkflows = [".github/workflows/cao-activity.yml", ".github/workflows/cao-dashboard.yml"];
+
+function githubFixture(repository) {
+  const [owner, name] = repository.split("/");
+  return {
+    [`${githubApi}/repos/${repository}`]: {
+      id: 101,
+      name,
+      full_name: repository,
+      owner: { login: owner },
+      private: true,
+      visibility: "private",
+      archived: false,
+      default_branch: "main",
+      html_url: `https://github.com/${repository}`,
+    },
+    [`${githubApi}/repos/${repository}/actions/workflows?per_page=100&page=1`]: {
+      total_count: deterministicWorkflows.length,
+      workflows: deterministicWorkflows.map((file, index) => ({
+        id: 201 + index,
+        name: path.basename(file, ".yml"),
+        path: file,
+        state: "active",
+        html_url: `https://github.com/${repository}/blob/main/${file}`,
+        created_at: "2025-01-01T00:00:00Z",
+        updated_at: "2025-01-02T00:00:00Z",
+      })),
+    },
+    [`${githubApi}/repos/github/gh-aw/releases?per_page=100&page=1`]: [
+      { tag_name: supportedGhAw, draft: false, prerelease: false },
+    ],
+  };
+}
+
+// Mirrors the Activity job environment when no read-only GitHub App is configured.
+function activityEnvironment(root, consumer, env, repository) {
+  const work = path.join(consumer, ".cao-activity");
+  return {
+    ...env,
+    GITHUB_REPOSITORY: repository,
+    ACTIVITY_APP_TOKEN: "",
+    GH_TOKEN: "synthetic-workflow-token",
+    GITHUB_API_URL: githubApi,
+    REPORT_CONTROL_SETTINGS: path.join(work, "control-settings.json"),
+    REPORT_INVENTORY: path.join(work, "control-plane-inventory.json"),
+    REPORT_INVENTORY_SOURCES: path.join(work, "inventory-sources.json"),
+    FAKE_GITHUB_RESPONSES: JSON.stringify(githubFixture(repository)),
+    FAKE_GITHUB_REQUESTS: path.join(root, "github-requests.log"),
+  };
+}
+
+async function resolveActivitySettings(consumer, activityEnv) {
+  await executeFile(process.execPath, [
+    path.join("activity", "control-settings.mjs"),
+    path.join(".github", "workflows", "shared", "control.mjs"),
+    policyPath,
+    activityEnv.REPORT_CONTROL_SETTINGS,
+  ], { cwd: consumer, env: activityEnv, timeout });
+  return JSON.parse(await readFile(activityEnv.REPORT_CONTROL_SETTINGS, "utf8"));
+}
+
+// Executes the installed workflow's complete inventory script as github-script
+// would, with exec.getExecOutput spawning the installed CLI in the consumer.
+async function runInventoryStep(consumer, activityEnv, spawned = []) {
+  const workflow = parse(await readFile(path.join(consumer, ".github", "workflows", "cao-activity.yml"), "utf8"));
+  const step = Object.values(workflow.jobs)
+    .flatMap((job) => job.steps ?? [])
+    .find(({ name }) => name === "Collect dashboard inventory");
+  assert.ok(step?.with?.script, "installed Activity workflow collects dashboard inventory");
+  const logs = [];
+  const context = {
+    require(specifier) {
+      const modules = { fs, path };
+      if (!Object.hasOwn(modules, specifier)) throw new Error(`unexpected require: ${specifier}`);
+      return modules[specifier];
+    },
+    process: { env: activityEnv, execPath: process.execPath },
+    core: { info: (message) => { logs.push(message); } },
+    exec: {
+      getExecOutput(command, args, { ignoreReturnCode = false } = {}) {
+        spawned.push(args);
+        return new Promise((resolve, reject) => {
+          const child = spawn(command, args, { cwd: consumer, env: activityEnv, timeout, stdio: ["ignore", "pipe", "pipe"] });
+          let stdout = "";
+          let stderr = "";
+          child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
+          child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
+          child.on("error", reject);
+          child.on("close", (exitCode) => {
+            if (exitCode !== 0 && !ignoreReturnCode) reject(new Error(`${command} exited with ${exitCode}: ${stderr}`));
+            else resolve({ exitCode, stdout, stderr });
+          });
+        });
+      },
+    },
+  };
+  try {
+    await vm.runInNewContext(`(async () => {\n${step.with.script}\n})()`, context);
+  } catch (error) {
+    throw new Error(`${error.message}\n${logs.join("\n")}`, { cause: error });
+  }
+  return { spawned, logs };
+}
+
+async function githubRequests(activityEnv) {
+  if (!await exists(activityEnv.FAKE_GITHUB_REQUESTS)) return [];
+  return (await readFile(activityEnv.FAKE_GITHUB_REQUESTS, "utf8")).trim().split("\n").filter(Boolean);
+}
+
 for (const [state, initialVersion, expectedVersion, expectedLog] of [
   ["missing gh-aw", undefined, supportedGhAw, "curl\nadd\n"],
   [`gh-aw ${supportedGhAw}`, supportedGhAw, supportedGhAw, "add\n"],
   [`gh-aw ${newerGhAw}`, newerGhAw, newerGhAw, "add\n"],
 ]) {
   test(`streamed install.sh with ${state} materializes the runtime and initializes policy`, async (t) => {
-    const { consumer, env, log } = await createConsumer(t, initialVersion);
+    const { consumer, repository, env, log } = await createConsumer(t, initialVersion);
     await streamInstaller(consumer, env);
     assert.equal(await log(), expectedLog);
-    await assertCompleteInstall(consumer, env, expectedVersion);
+    await assertCompleteInstall(consumer, env, expectedVersion, repository);
   });
 }
+
+test("streamed install.sh scopes policy to gh's current repository, not the ambient GITHUB_REPOSITORY", async (t) => {
+  const { consumer, repository, env, log } = await createConsumer(t, supportedGhAw, { repository: "beta-org/ops.tools" });
+  await streamInstaller(consumer, { ...env, GITHUB_REPOSITORY: "catalog-org/ambient" });
+  assert.equal(await log(), "add\n");
+  await assertCompleteInstall(consumer, env, supportedGhAw, repository);
+});
 
 test(`streamed install.sh with gh-aw ${olderGhAw} and no terminal stops with upgrade guidance`, async (t) => {
   const { consumer, env, log, installedGhAw } = await createConsumer(t, olderGhAw);
@@ -299,7 +437,7 @@ const terminalCases = [
 
 for (const { name, initialVersion, answer, environment = {}, manifest, expectedLog, expectedVersion, failure } of terminalCases) {
   test(`install.sh on a terminal: ${name}`, { skip: process.platform === "win32" }, async (t) => {
-    const { consumer, env, log, installedGhAw } = await createConsumer(t, initialVersion);
+    const { consumer, repository, env, log, installedGhAw } = await createConsumer(t, initialVersion);
     if (manifest) await writeFile(path.join(consumer, "aw.yml"), `min-version: ${manifest}\n`);
     const terminalEnv = { ...env, ...environment };
     const result = await runWithTerminal(consumer, terminalEnv, answer);
@@ -313,7 +451,7 @@ for (const { name, initialVersion, answer, environment = {}, manifest, expectedL
     } else if (expectedVersion) {
       assert.equal(result.code, 0, result.stdout);
       assert.equal(await installedGhAw(), `${expectedVersion}\n`);
-      await assertCompleteInstall(consumer, terminalEnv, expectedVersion);
+      await assertCompleteInstall(consumer, terminalEnv, expectedVersion, repository);
     } else {
       assert.equal(result.code, 0, result.stdout);
       assert.match(result.stdout, manualUpgrade(supportedGhAw));
@@ -324,27 +462,42 @@ for (const { name, initialVersion, answer, environment = {}, manifest, expectedL
 }
 
 test("install.sh reruns restore missing policy and launcher mode without replacing consumer policy", async (t) => {
-  const { consumer, env, log } = await createConsumer(t, supportedGhAw);
+  const { consumer, repository, env, log } = await createConsumer(t, supportedGhAw);
   await runFile(consumer, env);
   assert.equal(await log(), "add\n");
-  await assertCompleteInstall(consumer, env, supportedGhAw);
+  await assertCompleteInstall(consumer, env, supportedGhAw, repository);
 
   await rm(path.join(consumer, policyPath));
   await runFile(consumer, env);
   assert.equal(await log(), "add\n");
-  await assertCompleteInstall(consumer, env, supportedGhAw);
+  await assertCompleteInstall(consumer, env, supportedGhAw, repository);
 
+  // Existing policies are consumer-owned: reruns neither look up nor narrow their scope.
+  const { FAKE_CONTROL_REPOSITORY: _, ...withoutLookup } = env;
   const customPolicy = '{"version":1,"gh-aw-version":"v9.9.9","control-plane":{"campaigns":{"custom":{}}}}\n';
   await writeFile(path.join(consumer, policyPath), customPolicy);
   await chmod(path.join(consumer, "cao.sh"), 0o644);
-  await streamInstaller(consumer, env);
+  await streamInstaller(consumer, withoutLookup);
   assert.equal(await log(), "add\n");
   assert.equal(await readFile(path.join(consumer, policyPath), "utf8"), customPolicy);
   await assertExecutable(path.join(consumer, "cao.sh"));
 
-  await runFile(consumer, env, ["githubnext/gh-aw-cao@v1.2.3"]);
+  await runFile(consumer, withoutLookup, ["githubnext/gh-aw-cao@v1.2.3"]);
   assert.equal(await log(), "add\nadd-force\n");
   assert.equal(await readFile(path.join(consumer, policyPath), "utf8"), customPolicy);
+
+  const ownerPolicy = `${JSON.stringify({
+    version: 1,
+    "gh-aw-version": supportedGhAw,
+    "control-plane": { scope: { "allowed-owners": ["alpha-org"] }, campaigns: {} },
+  })}\n`;
+  await writeFile(path.join(consumer, policyPath), ownerPolicy);
+  await streamInstaller(consumer, withoutLookup, ["githubnext/gh-aw-cao@v1.2.3"]);
+  assert.equal(await log(), "add\nadd-force\nadd-force\n");
+  assert.equal(await readFile(path.join(consumer, policyPath), "utf8"), ownerPolicy);
+  await executeFile(process.execPath, [path.join(".github", "workflows", "shared", "control.mjs"), "validate-policy", policyPath], {
+    cwd: consumer, env: withoutLookup, timeout,
+  });
 });
 
 for (const [failure, environment, expectedLog] of [
@@ -359,3 +512,71 @@ for (const [failure, environment, expectedLog] of [
     await assertNothingInstalled(consumer);
   });
 }
+
+for (const [description, repository] of [
+  ["fails", undefined],
+  ["returns no repository", ""],
+  ["returns a malformed repository", "not a repository"],
+  ["returns multiple repositories", "alpha-org/control\nbeta-org/ops.tools"],
+]) {
+  test(`install.sh exits nonzero without policy when the repository lookup ${description}`, async (t) => {
+    const { consumer, env, log } = await createConsumer(t, supportedGhAw);
+    const { FAKE_CONTROL_REPOSITORY: _, ...withoutLookup } = env;
+    const lookupEnv = repository === undefined ? withoutLookup : { ...env, FAKE_CONTROL_REPOSITORY: repository };
+    const result = await runStreamed(consumer, lookupEnv);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /Unable to determine control repository: .*Run cao init from a GitHub repository checkout with a configured remote\./s);
+    assert.equal(await log(), "add\n");
+    assert.equal(await exists(path.join(consumer, policyPath)), false);
+    await executeFile(process.execPath, [materializer, "verify", "activity"], { cwd: consumer, env, timeout });
+  });
+}
+
+test("streamed install.sh initializes repository-only Activity without an App", async (t) => {
+  const { root, consumer, repository, env, log } = await createConsumer(t, supportedGhAw);
+  await streamInstaller(consumer, env);
+  assert.equal(await log(), "add\n");
+
+  const activityEnv = activityEnvironment(root, consumer, env, repository);
+  const settings = await resolveActivitySettings(consumer, activityEnv);
+  assert.equal(settings.policy_resolution.status, "available", settings.policy_resolution.reason);
+  const { spawned } = await runInventoryStep(consumer, activityEnv);
+
+  assert.deepEqual(settings.allowed_owners, [repository.split("/")[0]]);
+  assert.deepEqual(settings.allowed_repositories, [repository]);
+  assert.deepEqual(settings.campaigns, {});
+  assert.equal(spawned.length, 1);
+  const sources = JSON.parse(await readFile(activityEnv.REPORT_INVENTORY_SOURCES, "utf8"));
+  const [owner, name] = repository.split("/");
+  assert.deepEqual(sources.campaigns.rows, []);
+  assert.deepEqual(
+    sources.repositories.rows.map((row) => [row.organization, row.repository, row.visibility]),
+    [[owner, name, "private"]],
+  );
+  assert.equal(sources.repositories.metadata.completeness, "complete");
+  assert.deepEqual(
+    sources.workflows.rows.map((row) => [row.organization, row.repository, row.workflow, row["workflow-registry-state"]]),
+    deterministicWorkflows.map((file) => [owner, name, file, "active"]),
+  );
+  assert.equal(sources.workflows.metadata.completeness, "complete");
+  assert.deepEqual((await githubRequests(activityEnv)).sort(), Object.keys(githubFixture(repository)).sort());
+});
+
+test("installed Activity still requires the App for an owner-wide policy", async (t) => {
+  const { root, consumer, repository, env } = await createConsumer(t, supportedGhAw);
+  await streamInstaller(consumer, env);
+  await writeFile(path.join(consumer, policyPath), `${JSON.stringify({
+    version: 1,
+    "gh-aw-version": supportedGhAw,
+    "control-plane": { scope: { "allowed-owners": [repository.split("/")[0]] }, campaigns: {} },
+  })}\n`);
+
+  const activityEnv = activityEnvironment(root, consumer, env, repository);
+  const settings = await resolveActivitySettings(consumer, activityEnv);
+  assert.equal(settings.policy_resolution.status, "available", settings.policy_resolution.reason);
+  assert.deepEqual(settings.allowed_repositories, []);
+  const spawned = [];
+  await assert.rejects(runInventoryStep(consumer, activityEnv, spawned), /Owner-wide repository discovery requires the read-only GitHub App/);
+  assert.deepEqual(spawned, []);
+  assert.deepEqual(await githubRequests(activityEnv), []);
+});

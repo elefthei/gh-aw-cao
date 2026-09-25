@@ -546,8 +546,6 @@ test("README routes zero-to-CAO requests to the setup skill", () => {
   assert.match(setupSkill, /Do not replace `auto` with an explicit model/);
   assert.match(setupSkill, /\.\/cao\.sh add githubnext\/gh-aw-cao\/<campaign-slug>/);
   assert.match(setupSkill, /consumer-owned policy/);
-  assert.match(setupSkill, /edit only `control-plane\.scope` to add `target-owner` and `target-owner\/target-repository`/);
-  assert.match(setupSkill, /Do not put `control-owner` or `control-repository` into this policy unless the selected target is the control repository/);
   assert.match(setupSkill, /if \(\/<\[\^>\]\+>\/\.test\(source\)\) throw new Error\('unresolved policy placeholder'\)/);
   assert.doesNotMatch(setupSkill, /```json\n[\s\S]*?"workers"/);
   assert.match(setupSkill, /campaign-owned orchestrator and worker identities are merged/);

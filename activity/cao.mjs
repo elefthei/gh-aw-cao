@@ -272,12 +272,33 @@ async function writeJsonAtomically(filePath, document) {
   }
 }
 
-function minimalPolicy(version) {
+// New policies authorize only the repository gh resolves for the current
+// checkout; broader collection is an explicit policy and credential decision.
+function resolveControlRepository(execute) {
+  const result = execute('gh', ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'], { encoding: 'utf8' });
+  const instruction = 'Run cao init from a GitHub repository checkout with a configured remote.';
+  if (result.error || result.status !== 0) {
+    throw new Error(`Unable to determine control repository: ${commandFailureMessage(result, 'gh repo view failed')}. ${instruction}`);
+  }
+  const repository = String(result.stdout || '').trim();
+  if (!REPOSITORY_COORDINATE.test(repository)) {
+    throw new Error(`Unable to determine control repository: gh repo view returned ${JSON.stringify(repository)}. ${instruction}`);
+  }
+  return repository;
+}
+
+function minimalPolicy(version, repository) {
   return {
     $schema: CAO_SCHEMA_URL,
     version: 1,
     'gh-aw-version': version,
-    'control-plane': { campaigns: {} }
+    'control-plane': {
+      scope: {
+        'allowed-owners': [repository.split('/')[0]],
+        'allowed-repositories': [repository]
+      },
+      campaigns: {}
+    }
   };
 }
 
@@ -294,7 +315,8 @@ export async function initializeCaoPolicy({
   }
 
   const version = parseGhAwVersion(execute('gh', ['aw', 'version'], { encoding: 'utf8' }));
-  await writeJsonAtomically(absolutePath, minimalPolicy(version));
+  const repository = resolveControlRepository(execute);
+  await writeJsonAtomically(absolutePath, minimalPolicy(version, repository));
   return { command: 'init', policy: policyPath, 'gh-aw-version': version };
 }
 
@@ -756,7 +778,7 @@ export async function addCaoCampaign(campaignSpec, ghAwOptions = [], {
       throw error;
     }
     const version = parseGhAwVersion(execute('gh', ['aw', 'version'], { encoding: 'utf8' }));
-    policy = minimalPolicy(version);
+    policy = minimalPolicy(version, resolveControlRepository(execute));
   }
 
   mergeCaoCampaignDeclaration(policy, declaration);
