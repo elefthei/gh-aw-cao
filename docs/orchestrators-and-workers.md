@@ -61,7 +61,7 @@ It does not receive a token, discovery query, or permission to dispatch another 
 
 ## Worker Value
 
-Operational value is evaluated at repository scope through each campaign's package-defined `operational-value.mjs` program. It is not inferred from worker runs, dispatch counts, generated outputs, or model assessments.
+Operational value is evaluated at repository scope through each campaign's campaign-defined `operational-value.mjs` program. It is not inferred from worker runs, dispatch counts, generated outputs, or model assessments.
 
 The repository-scoped evaluator owns its frozen evidence contract, eligibility rules, maturity window, metric semantics, and validation. It emits campaign-defined numeric observations for each admitted repository; missing evidence remains unavailable rather than becoming zero.
 
