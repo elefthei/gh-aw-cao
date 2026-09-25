@@ -14999,9 +14999,9 @@
           "operational-value",
           "cost",
           "engines-models",
-          "steering",
           "firewall",
-          "mcps"
+          "mcps",
+          "steering"
         ]
       },
       {
