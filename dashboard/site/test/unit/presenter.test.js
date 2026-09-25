@@ -3081,16 +3081,19 @@ describe('presenter built-in and custom pages', () => {
         title: 'Linked issue',
         titleLink: {
           href: 'https://github.com/octo/repo/issues/42',
-          label: '#42'
+          label: 'Open #42 on GitHub'
         }
       }
     }));
     const titleLink = /** @type {HTMLAnchorElement} */ (rendered.querySelector('[data-page-title-link]'));
     expect(titleLink.hidden).toBe(false);
-    expect(titleLink.textContent).toBe('#42');
+    expect(titleLink.textContent).toBe('Open #42 on GitHub');
     expect(titleLink.getAttribute('href')).toBe('https://github.com/octo/repo/issues/42');
     expect(titleLink.getAttribute('target')).toBe('_blank');
     expect(titleLink.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(titleLink.getAttribute('aria-label')).toBeNull();
+    expect(titleLink.getAttribute('title')).toBe('Open #42 on GitHub');
+    expect(titleLink.querySelector('.octicon-mark-github')).not.toBeNull();
     expect(rendered.ownerDocument.title).toBe('Linked issue · Page Navigation');
 
     secondLink.dataset.routeTitle = 'Canonical second';

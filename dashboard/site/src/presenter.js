@@ -2152,16 +2152,22 @@ function renderPageTitleLink(target, candidate) {
     target.removeAttribute('target');
     target.removeAttribute('rel');
     target.removeAttribute('aria-label');
-    target.textContent = '';
+    target.removeAttribute('title');
+    target.replaceChildren();
     return;
   }
   target.hidden = false;
-  const attrs = externalAnchorAttrs(link.href, `View ${link.label} on GitHub`);
+  const attrs = externalAnchorAttrs(link.href, link.label);
   for (const [name, value] of Object.entries(attrs)) {
     if (value === undefined) target.removeAttribute(name);
     else target.setAttribute(name, value);
   }
-  target.textContent = link.label;
+  target.removeAttribute('aria-label');
+  target.title = link.label;
+  target.replaceChildren(
+    octicon('mark-github'),
+    h('span', { className: 'sr-only' }, link.label)
+  );
 }
 
 /**
