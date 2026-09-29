@@ -2,6 +2,11 @@
   "schemaVersion": 1,
   "examples": [
     {
+      "id": "stale-review-follow-up",
+      "metadata": "examples/stale-review-follow-up.json",
+      "dashboard": "examples/stale-review-follow-up.dashboard.yml"
+    },
+    {
       "id": "triage-review-readiness",
       "metadata": "examples/triage-review-readiness.json",
       "dashboard": "examples/triage-review-readiness.dashboard.yml"

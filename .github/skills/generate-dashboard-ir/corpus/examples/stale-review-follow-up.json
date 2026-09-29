@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "id": "stale-review-follow-up",
+  "task": {
+    "actor": "Repository operator",
+    "subject": "A standalone pull-request stale-review follow-up workflow for the githubnext/gh-aw-cao repository",
+    "intent": "Decide whether the stale-review follow-up workflow is activating on pull requests that are waiting for reviewer attention, producing only bounded reminder outputs when needed, and attaining its intended value of converting stale review opportunities into accepted follow-up evidence.",
+    "activationConditions": [
+      "A repository operator enables a standalone stale-review follow-up workflow on githubnext/gh-aw-cao.",
+      "A pull request in githubnext/gh-aw-cao remains open long enough to create one stable stale-review follow-up opportunity within the selected horizon.",
+      "At least one workflow run associated with that pull-request follow-up opportunity is observed in the dashboard horizon."
+    ],
+    "requiredEffects": [
+      "For each stale-review opportunity, the workflow emits at most one safe pull-request follow-up output that reminds reviewers or records why no reminder was needed.",
+      "Accepted repository evidence is limited to the durable pull-request outcome, any linked finding, and the workflow run provenance for that same pull-request opportunity.",
+      "The workflow leaves recently updated, already-merged, already-closed, or already-reminded pull requests without a new durable output."
+    ],
+    "noopConditions": [
+      "The pull request was merged or closed before the workflow evaluated the stale-review opportunity.",
+      "The pull request received recent review activity and no longer meets the stale-review threshold.",
+      "A prior accepted workflow output already covers the same stale-review opportunity."
+    ],
+    "successConditions": [
+      "The workflow activates for eligible stale-review opportunities within the selected horizon.",
+      "Observed pull-request outcomes for eligible opportunities are accepted or intentionally no-op with matching evidence strength and run provenance.",
+      "Operational-grader observations preserve the native stale-review follow-up attainment metric exactly as published by gh-aw."
+    ],
+    "uncertainties": [
+      "A successful run does not by itself prove the durable pull-request reminder was accepted.",
+      "Pending, ignored, or rejected safe outputs do not establish attained stale-review follow-up value.",
+      "A null operational-grader metric must remain distinct from a numeric zero."
+    ]
+  },
+  "operationalValue": {
+    "upstream": "gh-aw",
+    "opportunityBinding": "Each hypothetical run binds to one stable stale-review follow-up opportunity for one open pull request in githubnext/gh-aw-cao within the selected horizon.",
+    "acceptedRepositoryEvidence": [
+      "One safe-output outcome in the outcomes source with outcome-category pull-request for the selected workflow and repository.",
+      "The matching run provenance in the runs source for the same workflow and run.",
+      "Optional linked findings in the findings source for the same workflow run when the workflow reports an actionable exception."
+    ],
+    "repositories": [
+      "githubnext/gh-aw-cao"
+    ],
+    "orderedMetrics": [
+      {
+        "id": "stale-review-follow-up-attainment",
+        "unit": "ratio",
+        "direction": "higher_is_better"
+      }
+    ],
+    "directMetric": {
+      "id": "stale-review-follow-up-attainment",
+      "source": "operational-graders",
+      "field": "operational-grader",
+      "unit": "ratio",
+      "range": "[0,1]",
+      "direction": "higher_is_better"
+    },
+    "baseline": {
+      "kind": "attainment-only",
+      "value": null,
+      "cutoff": null
+    },
+    "maturationRule": "Use the direct metric only when the operational-graders row is present for the selected workflow run; do not infer maturity from run completion or safe-output publication alone.",
+    "zeroRule": "Metric value 0 means the authoritative gh-aw operational grader reported zero attainment for the selected stale-review follow-up opportunity.",
+    "missingEvidenceRule": "When the operational-graders row or required matching outcome evidence is absent, treat attainment as missing rather than zero and preserve null exactly as published by gh-aw.",
+    "preservation": "Preserve the metric ID, native finite value or null, unit, and direction exactly as published by gh-aw."
+  },
+  "logicalSources": {
+    "workflows": {
+      "rows": [
+        {
+          "organization": "githubnext",
+          "repository": "gh-aw-cao",
+          "workflow": ".github/workflows/stale-review-follow-up.yml",
+          "workflow-name": "Stale review follow-up",
+          "workflow-role": "standalone",
+          "workflow-active": "true",
+          "rollout-mode": "review",
+          "observed-at": "2026-09-01T00:00:00Z",
+          "repository-link": {
+            "relation": "repository",
+            "href": "https://github.com/githubnext/gh-aw-cao",
+            "label": "githubnext/gh-aw-cao"
+          },
+          "workflow-link": {
+            "relation": "workflow",
+            "href": "https://github.com/githubnext/gh-aw-cao/actions/workflows/stale-review-follow-up.yml",
+            "label": "Stale review follow-up"
+          }
+        }
+      ]
+    }
+  },
+  "dashboard": "stale-review-follow-up.dashboard.yml"
+}
