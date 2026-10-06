@@ -2,6 +2,11 @@
   "schemaVersion": 1,
   "examples": [
     {
+      "id": "agent-assignment-staleness",
+      "metadata": "examples/agent-assignment-staleness.json",
+      "dashboard": "examples/agent-assignment-staleness.dashboard.yml"
+    },
+    {
       "id": "triage-review-readiness",
       "metadata": "examples/triage-review-readiness.json",
       "dashboard": "examples/triage-review-readiness.dashboard.yml"

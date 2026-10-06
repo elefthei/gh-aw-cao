@@ -1,0 +1,247 @@
+{
+  "schemaVersion": 1,
+  "id": "agent-assignment-staleness",
+  "task": {
+    "actor": "Repository operator",
+    "subject": "A work-item execution workflow in githubnext/gh-aw-cao that delegates repository work to agents",
+    "intent": "Determine whether delegated agent assignments are staying fresh enough to move work items forward, surfacing stale or long-running assignments that need operator intervention and tracking attainment of timely assignment progress.",
+    "activationConditions": [
+      "A repository operator enables a workflow in githubnext/gh-aw-cao that creates delegated agent assignments for work items.",
+      "At least one work item and its related agent assignment are observed within the dashboard horizon for that workflow.",
+      "An assignment remains active long enough to be classified as long-running or stale by canonical assignment evidence."
+    ],
+    "requiredEffects": [
+      "Each hypothetical run must bind to a stable delegated work-item opportunity identified by work-item-id and assignment-id for the selected workflow.",
+      "The workflow must either advance the assignment or leave evidence showing why an operator must intervene on stale or blocked work.",
+      "Accepted repository evidence is limited to canonical work-item and agent-assignment records, their run and repository links, and the native operational-grader result for the same workflow scope."
+    ],
+    "noopConditions": [
+      "No delegated work item exists for the selected workflow in the horizon.",
+      "All observed assignments are completed or otherwise not active, leaving no active queue to review.",
+      "Assignment evidence is unavailable or incomplete, so the dashboard cannot distinguish fresh work from stale work."
+    ],
+    "successConditions": [
+      "The workflow activates on delegated work-item opportunities for the selected workflow.",
+      "Operators can identify active assignments, stale exceptions, and the affected work-item objective from canonical evidence alone.",
+      "The direct attainment metric remains the native ordered primary gh-aw operational-grader metric for timely assignment progress."
+    ],
+    "uncertainties": [
+      "A non-stale assignment is not proof that the work item will complete successfully.",
+      "Long-running assignments may be expected for some objectives and still require operator review.",
+      "Missing operational-grader evidence must remain distinct from a zero attainment value."
+    ]
+  },
+  "operationalValue": {
+    "upstream": "gh-aw",
+    "opportunityBinding": "One hypothetical run corresponds to one stable delegated work-item opportunity for the selected workflow, identified by work-item-id with its observed assignment-id evidence.",
+    "repositories": [
+      "githubnext/gh-aw-cao"
+    ],
+    "acceptedEvidence": [
+      "work-items rows for the selected workflow and repository",
+      "agent-assignments rows for the same work-item-id",
+      "repository-link, run-link, and evidence-link fields attached to those rows when present",
+      "operational-graders rows for the same workflow scope"
+    ],
+    "directMetric": {
+      "id": "timely-assignment-progress-attainment",
+      "unit": "ratio",
+      "direction": "higher_is_better",
+      "range": [
+        0,
+        1
+      ]
+    },
+    "baseline": {
+      "kind": "attainment-only",
+      "value": null,
+      "cutoff": null
+    },
+    "maturationRules": [
+      "Use the direct metric only from canonical gh-aw operational-grader observations for the selected workflow.",
+      "Treat an opportunity as matured only when the operational-grader observation for that run is present and its primary metric is a finite number in [0,1]."
+    ],
+    "zeroRules": [
+      "A direct metric value of 0 means the canonical primary operational-grader metric reported zero attainment for the run.",
+      "Do not infer zero from stale assignment counts, incomplete evidence, or null metrics."
+    ],
+    "missingEvidenceRules": [
+      "When no operational-grader observation exists for the selected workflow scope, attainment is missing rather than zero.",
+      "When assignment evidence is unavailable, incomplete, or absent, show execution evidence only and do not fabricate attainment."
+    ],
+    "preservation": "Preserve metric IDs, order, native finite values or null, units, and directions exactly as published by gh-aw.",
+    "orderedMetrics": [
+      {
+        "id": "timely-assignment-progress-attainment",
+        "unit": "ratio",
+        "direction": "higher_is_better"
+      }
+    ]
+  },
+  "logicalSources": {
+    "workflows": {
+      "rows": [
+        {
+          "organization": "githubnext",
+          "repository": "gh-aw-cao",
+          "workflow": ".github/workflows/delegated-work-review.yml",
+          "workflow-name": "Delegated work review",
+          "workflow-role": "standalone",
+          "workflow-active": "true",
+          "rollout-mode": "review",
+          "observed-at": "2026-09-01T00:00:00Z",
+          "repository-link": {
+            "relation": "repository",
+            "href": "https://github.com/githubnext/gh-aw-cao",
+            "label": "githubnext/gh-aw-cao"
+          },
+          "workflow-link": {
+            "relation": "workflow",
+            "href": "https://github.com/githubnext/gh-aw-cao/actions/workflows/delegated-work-review.yml",
+            "label": "Delegated work review"
+          }
+        }
+      ]
+    },
+    "work-items": {
+      "rows": [
+        {
+          "work-item-id": "wi-100",
+          "name": "Review blocked dashboard query plan",
+          "objective": "Unblock the declarative query migration for dashboard pages",
+          "organization": "githubnext",
+          "repository": "gh-aw-cao",
+          "workflow": ".github/workflows/delegated-work-review.yml",
+          "workflow-name": "Delegated work review",
+          "scope": "repository",
+          "domain": "dashboard",
+          "work-type": "review",
+          "lifecycle-state": "active",
+          "phase": "execution",
+          "reason": "operator-requested",
+          "reason-evidence-class": "workflow-input",
+          "next-action": "Check the assignment for blocked progress and decide whether to intervene.",
+          "next-actor": "operator",
+          "waiting-on": "agent",
+          "waiting-since": "2026-09-02T00:00:00Z",
+          "owner": "dashboard-team",
+          "consequence-tier": "high",
+          "verification-state": "pending",
+          "outcome-state": "pending",
+          "started-at": "2026-09-01T12:00:00Z",
+          "observed-at": "2026-09-04T12:00:00Z",
+          "repository-link": {
+            "relation": "repository",
+            "href": "https://github.com/githubnext/gh-aw-cao",
+            "label": "githubnext/gh-aw-cao"
+          },
+          "run-link": {
+            "relation": "run",
+            "href": "https://github.com/githubnext/gh-aw-cao/actions/runs/1001",
+            "label": "Run 1001"
+          }
+        }
+      ]
+    },
+    "agent-assignments": {
+      "rows": [
+        {
+          "assignment-id": "aa-100",
+          "agent-id": "copilot-coding-agent",
+          "agent-name": "Copilot coding agent",
+          "agent-icon": "copilot",
+          "agent-description": "Investigates and updates repository code for delegated work.",
+          "permissions": "safe-output-only",
+          "agent-state": "active",
+          "work-item-id": "wi-100",
+          "objective": "Unblock the declarative query migration for dashboard pages",
+          "assignment-state": "active",
+          "handoff-state": "none",
+          "dependency-state": "waiting",
+          "conflict-state": "clear",
+          "run-count": 2,
+          "total-runtime-seconds": 14400,
+          "last-observed-at": "2026-09-04T12:00:00Z",
+          "long-running": true,
+          "stale": true,
+          "observed-at": "2026-09-04T12:00:00Z",
+          "repository-link": {
+            "relation": "repository",
+            "href": "https://github.com/githubnext/gh-aw-cao",
+            "label": "githubnext/gh-aw-cao"
+          },
+          "run-link": {
+            "relation": "run",
+            "href": "https://github.com/githubnext/gh-aw-cao/actions/runs/1001",
+            "label": "Run 1001"
+          }
+        },
+        {
+          "assignment-id": "aa-101",
+          "agent-id": "copilot-coding-agent",
+          "agent-name": "Copilot coding agent",
+          "agent-icon": "copilot",
+          "agent-description": "Investigates and updates repository code for delegated work.",
+          "permissions": "safe-output-only",
+          "agent-state": "active",
+          "work-item-id": "wi-100",
+          "objective": "Unblock the declarative query migration for dashboard pages",
+          "assignment-state": "active",
+          "handoff-state": "none",
+          "dependency-state": "ready",
+          "conflict-state": "clear",
+          "run-count": 1,
+          "total-runtime-seconds": 1800,
+          "last-observed-at": "2026-09-03T12:00:00Z",
+          "long-running": false,
+          "stale": false,
+          "observed-at": "2026-09-03T12:00:00Z",
+          "repository-link": {
+            "relation": "repository",
+            "href": "https://github.com/githubnext/gh-aw-cao",
+            "label": "githubnext/gh-aw-cao"
+          },
+          "run-link": {
+            "relation": "run",
+            "href": "https://github.com/githubnext/gh-aw-cao/actions/runs/1002",
+            "label": "Run 1002"
+          }
+        }
+      ]
+    },
+    "operational-graders": {
+      "rows": [
+        {
+          "organization": "githubnext",
+          "repository": "gh-aw-cao",
+          "workflow": ".github/workflows/delegated-work-review.yml",
+          "observation-id": "og-100",
+          "run": "1001",
+          "run-attempt": 1,
+          "rollout-mode": "review",
+          "operational-grader": "timely-assignment-progress",
+          "operational-grader-definition": "timely-assignment-progress-attainment",
+          "operational-grader-unit": "ratio",
+          "operational-grader-direction": "higher_is_better",
+          "observed-at": "2026-09-04T12:00:00Z",
+          "repository-link": {
+            "relation": "repository",
+            "href": "https://github.com/githubnext/gh-aw-cao",
+            "label": "githubnext/gh-aw-cao"
+          },
+          "workflow-link": {
+            "relation": "workflow",
+            "href": "https://github.com/githubnext/gh-aw-cao/actions/workflows/delegated-work-review.yml",
+            "label": "Delegated work review"
+          },
+          "run-link": {
+            "relation": "run",
+            "href": "https://github.com/githubnext/gh-aw-cao/actions/runs/1001",
+            "label": "Run 1001"
+          }
+        }
+      ]
+    }
+  },
+  "dashboard": "agent-assignment-staleness.dashboard.yml"
+}

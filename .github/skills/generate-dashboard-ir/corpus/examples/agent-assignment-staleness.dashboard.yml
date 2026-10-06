@@ -1,0 +1,164 @@
+language-version: "0.1.0"
+dashboard:
+  id: agent-assignment-staleness
+  title: Agent assignment staleness
+  defaults:
+    scope:
+      repositories:
+        - githubnext/gh-aw-cao
+      workflows:
+        - .github/workflows/delegated-work-review.yml
+    time:
+      range: 30d
+  units:
+    percent:
+      name: Percent
+      symbol: "%"
+      significant: 0.1
+  pages:
+    - id: agent-assignment-staleness
+      kind: custom
+      title: Agent assignment staleness
+      description: Shows whether delegated agent assignments for one workflow are active, becoming stale, and attaining timely progress.
+      sections:
+        - id: assignment-summary
+          title: Assignment summary
+          description: Executive summary of stale versus fresh assignments, the active delegated queue, and attainment for this workflow.
+          layout: full
+          views:
+            - assignment-state-distribution
+            - stale-assignment-queue
+            - active-work-item-queue
+            - assignment-attainment
+      views:
+        - id: assignment-state-distribution
+          title: Assignment freshness distribution
+          description: Current distribution of observed assignments by stale state for the selected workflow.
+          data:
+            source: agent-assignments
+            filters:
+              workflow:
+                - .github/workflows/delegated-work-review.yml
+          mark: chart
+          chart: pie
+          layout: full
+          disclosure: essential
+          encoding:
+            x:
+              field: stale
+              type: nominal
+              title: Stale
+            y:
+              field: assignment-id
+              type: quantitative
+              aggregate: count
+              title: Assignments
+        - id: stale-assignment-queue
+          title: Stale assignment exceptions
+          description: Active assignments that are stale and need operator review.
+          data:
+            source: agent-assignments
+            order-by:
+              - field: last-observed-at
+                direction: desc
+              - field: assignment-id
+                direction: asc
+            limit: 20
+          mark: table
+          controls: interactive
+          layout: full
+          disclosure: essential
+          empty-message: No stale active assignments match the selected horizon.
+          encoding:
+            href:
+              field: run-link
+              type: nominal
+            columns:
+              - field: assignment-id
+                type: nominal
+                title: Assignment
+              - field: work-item-id
+                type: nominal
+                title: Work item
+              - field: objective
+                type: nominal
+                title: Objective
+              - field: dependency-state
+                type: nominal
+                title: Dependency state
+              - field: long-running
+                type: nominal
+                title: Long running
+                display: status
+              - field: last-observed-at
+                type: temporal
+                title: Last observed
+              - field: run-count
+                type: quantitative
+                title: Runs
+        - id: active-work-item-queue
+          description: Current active work items awaiting delegated agent progress.
+          data:
+            source: work-items
+            filters:
+              workflow:
+                - .github/workflows/delegated-work-review.yml
+              lifecycle-state:
+                - active
+            order-by:
+              - field: observed-at
+                direction: desc
+              - field: work-item-id
+                direction: asc
+            limit: 20
+          mark: table
+          controls: interactive
+          layout: full
+          disclosure: supplemental
+          empty-message: No active delegated work items match the selected horizon.
+          encoding:
+            href:
+              field: run-link
+              type: nominal
+            columns:
+              - field: work-item-id
+                type: nominal
+                title: Work item
+              - field: name
+                type: nominal
+                title: Name
+              - field: objective
+                type: nominal
+                title: Objective
+              - field: next-actor
+                type: nominal
+                title: Next actor
+              - field: next-action
+                type: nominal
+                title: Next action
+              - field: waiting-on
+                type: nominal
+                title: Waiting on
+              - field: observed-at
+                type: temporal
+                title: Observed
+        - id: assignment-attainment
+          title: Timely assignment progress attainment
+          description: Native gh-aw operational-grader observations for timely assignment progress.
+          data:
+            source: operational-graders
+            filters:
+              workflow:
+                - .github/workflows/delegated-work-review.yml
+              operational-grader-definition:
+                - timely-assignment-progress-attainment
+          mark: metric
+          layout: half
+          disclosure: essential
+          encoding:
+            value:
+              field: operational-grader
+              type: quantitative
+              aggregate: mean
+              title: Mean attainment
+              unit: percent
