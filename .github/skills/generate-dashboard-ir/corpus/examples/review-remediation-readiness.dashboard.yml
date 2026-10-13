@@ -1,0 +1,148 @@
+language-version: "0.1.0"
+dashboard:
+  id: review-remediation-readiness
+  title: Review remediation readiness
+  defaults:
+    scope:
+      repositories:
+        - githubnext/gh-aw-cao
+      workflows:
+        - .github/workflows/review-remediation.yml
+    time:
+      range: 30d
+  units:
+    percent:
+      name: Percent
+      symbol: "%"
+      significant: 0.1
+  pages:
+    - id: review-remediation-readiness
+      kind: custom
+      title: Review remediation readiness
+      description: Shows whether the review remediation workflow activates on review-requested pull requests, produces terminal remediation outcomes, and reports its native attainment metric.
+      sections:
+        - id: remediation-summary
+          title: Remediation summary
+          description: Executive summary of activation, terminal remediation outcomes, actionable exceptions, and attainment for this workflow.
+          layout: full
+          views:
+            - remediation-outcome-disposition
+            - remediation-activation-trend
+            - remediation-exceptions
+            - remediation-attainment-trend
+      views:
+        - id: remediation-outcome-disposition
+          title: Remediation outcome disposition
+          description: Current distribution of safe-output outcome states for review remediation pull-request outputs in the selected horizon.
+          data:
+            source: outcomes
+            filters:
+              outcome-category: pull-request
+          mark: chart
+          chart: pie
+          layout: full
+          disclosure: essential
+          encoding:
+            x:
+              field: outcome-state
+              type: ordinal
+              title: Outcome state
+            y:
+              field: safe-output
+              type: quantitative
+              aggregate: count
+              title: Outcomes
+        - id: remediation-activation-trend
+          title: Remediation activation trend
+          description: Daily workflow runs show whether the review remediation workflow is activating on review-requested pull-request opportunities.
+          data:
+            source: runs
+            filters:
+              workflow:
+                - .github/workflows/review-remediation.yml
+          mark: chart
+          chart: line
+          layout: half
+          disclosure: essential
+          encoding:
+            x:
+              field: started-at
+              type: temporal
+              time-unit: day
+              title: Started
+            y:
+              field: run
+              type: quantitative
+              aggregate: distinct-count
+              title: Runs
+        - id: remediation-exceptions
+          title: Actionable remediation exceptions
+          description: Terminal non-accepted pull-request outcomes that need operator review.
+          data:
+            source: outcomes
+            filters:
+              outcome-category: pull-request
+              outcome-state:
+                - rejected
+                - ignored
+                - pending
+            order-by:
+              - field: observed-at
+                direction: desc
+              - field: outcome-number
+                direction: asc
+            limit: 20
+          mark: table
+          controls: interactive
+          layout: full
+          disclosure: essential
+          empty-message: No actionable remediation exceptions match the selected horizon.
+          encoding:
+            href:
+              field: pull-request-link
+              type: nominal
+            columns:
+              - field: outcome-title
+                type: nominal
+                title: Pull request
+                display: outcome-link
+              - field: outcome-number
+                type: quantitative
+                title: Number
+              - field: outcome-state
+                type: ordinal
+                title: State
+                display: status
+              - field: evidence-strength
+                type: ordinal
+                title: Evidence
+                display: status
+              - field: run-conclusion
+                type: ordinal
+                title: Run conclusion
+                display: status
+              - field: observed-at
+                type: temporal
+                title: Observed
+        - id: remediation-attainment-trend
+          title: Review remediation attainment
+          description: Operational-value observations show the native review-remediation metric published by gh-aw over time.
+          data:
+            source: operational-values
+            filters:
+              operational-value-definition: review-remediation-attainment
+          mark: chart
+          chart: line
+          layout: half
+          disclosure: essential
+          encoding:
+            x:
+              field: observed-at
+              type: temporal
+              time-unit: day
+              title: Observed
+            y:
+              field: operational-value
+              type: quantitative
+              aggregate: mean
+              title: Mean attainment

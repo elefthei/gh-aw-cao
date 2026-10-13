@@ -2,6 +2,11 @@
   "schemaVersion": 1,
   "examples": [
     {
+      "id": "review-remediation-readiness",
+      "metadata": "examples/review-remediation-readiness.json",
+      "dashboard": "examples/review-remediation-readiness.dashboard.yml"
+    },
+    {
       "id": "triage-review-readiness",
       "metadata": "examples/triage-review-readiness.json",
       "dashboard": "examples/triage-review-readiness.dashboard.yml"

@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "id": "review-remediation-readiness",
+  "task": {
+    "actor": "Repository operator",
+    "subject": "A pull-request review remediation workflow for the githubnext/gh-aw-cao repository",
+    "intent": "Determine whether the pull-request review remediation workflow activates on review-requested pull requests, produces bounded remediation pull requests when evidence supports action, and attains its intended value of converting review requests into accepted remediation outcomes.",
+    "activationConditions": [
+      "A repository operator enables a standalone pull-request review remediation workflow on githubnext/gh-aw-cao.",
+      "A pull request in githubnext/gh-aw-cao enters a review-requested state that creates one stable remediation opportunity for the workflow.",
+      "A workflow run associated with that pull-request remediation opportunity is observed within the dashboard horizon."
+    ],
+    "requiredEffects": [
+      "For each eligible review-requested pull request opportunity, the workflow evaluates the review context and emits at most one safe pull-request output proposing remediation or an evidence-backed no-op.",
+      "Accepted repository evidence must remain limited to the emitted pull-request outcome, the producing workflow run provenance, and any same-opportunity finding evidence.",
+      "The workflow must leave already-remediated, ineligible, or duplicate review opportunities without a new durable output."
+    ],
+    "noopConditions": [
+      "The pull request is already closed, merged, or no longer awaiting review remediation before evaluation.",
+      "The review request lacks the minimum changed files or review evidence needed for a bounded remediation proposal.",
+      "A prior accepted workflow output already covers the same pull-request remediation opportunity."
+    ],
+    "successConditions": [
+      "The workflow activates for eligible review-requested pull-request opportunities within the selected horizon.",
+      "Observed durable outputs for eligible opportunities are accepted remediation pull requests or intentional no-ops with matching evidence strength and run provenance.",
+      "Operational-grader observations preserve the ordered native metric published by gh-aw for each workflow run."
+    ],
+    "uncertainties": [
+      "A completed run does not by itself prove the emitted remediation pull request was accepted.",
+      "Pending, rejected, or ignored outputs do not establish attained remediation readiness.",
+      "A null operational-grader metric must remain distinct from a numeric zero."
+    ]
+  },
+  "operationalValue": {
+    "upstream": "gh-aw",
+    "orderedMetrics": [
+      {
+        "id": "review-remediation-attainment",
+        "unit": "ratio",
+        "direction": "higher_is_better"
+      }
+    ],
+    "preservation": "Preserve metric IDs, order, native finite values or null, units, and directions exactly as published by gh-aw.",
+    "opportunity": {
+      "kind": "review-requested-pull-request",
+      "stability": "One stable opportunity exists per review-requested pull request until the request is remediated, closed, or superseded.",
+      "repositories": [
+        "githubnext/gh-aw-cao"
+      ],
+      "evidence": [
+        "workflow run provenance for the remediation opportunity",
+        "safe-output outcome records in the outcomes source",
+        "linked finding evidence for the same repository, workflow, and run when present"
+      ]
+    },
+    "directMetric": {
+      "id": "review-remediation-attainment",
+      "unit": "ratio",
+      "direction": "higher_is_better",
+      "domain": "[0,1]"
+    },
+    "baseline": {
+      "kind": "attainment-only",
+      "value": null,
+      "cutoff": null
+    },
+    "maturation": {
+      "rule": "An observation is mature when the workflow run has produced a terminal outcome state of accepted, rejected, ignored, lifecycle, or lifecycle-close for the bound remediation opportunity."
+    },
+    "zeroRule": "Assign 0 only when accepted repository evidence shows the eligible remediation opportunity reached a terminal non-attained outcome without an accepted remediation output.",
+    "missingEvidenceRule": "Return null when repository evidence is absent, incomplete, or only shows workflow execution without an attributable remediation outcome."
+  },
+  "logicalSources": {
+    "workflows": {
+      "rows": [
+        {
+          "organization": "githubnext",
+          "repository": "gh-aw-cao",
+          "workflow": ".github/workflows/review-remediation.yml",
+          "workflow-name": "Review remediation",
+          "workflow-role": "standalone",
+          "workflow-active": "true",
+          "rollout-mode": "review",
+          "observed-at": "2026-09-01T00:00:00Z",
+          "repository-link": {
+            "relation": "repository",
+            "href": "https://github.com/githubnext/gh-aw-cao",
+            "label": "githubnext/gh-aw-cao"
+          },
+          "workflow-link": {
+            "relation": "workflow",
+            "href": "https://github.com/githubnext/gh-aw-cao/actions/workflows/review-remediation.yml",
+            "label": "Review remediation"
+          }
+        }
+      ]
+    }
+  },
+  "dashboard": "review-remediation-readiness.dashboard.yml"
+}
